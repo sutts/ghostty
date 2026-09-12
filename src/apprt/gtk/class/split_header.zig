@@ -7,6 +7,8 @@ const gobject = @import("gobject");
 const gtk = @import("gtk");
 
 const configpkg = @import("../../../config.zig");
+const global = @import("../../../global.zig");
+const themepkg = @import("../../../config/theme.zig");
 const gresource = @import("../build/gresource.zig");
 const Common = @import("../class.zig").Common;
 const Application = @import("application.zig").Application;
@@ -41,6 +43,10 @@ const accent_hue_bins = 36;
 /// Name given to the picker's "no avatar" button so it can't be mistaken
 /// for an image path.
 const no_avatar_name = "none";
+
+/// Name given to the theme picker's "default" row; the colon keeps it from
+/// colliding with a theme file name.
+const default_theme_name = ":default";
 
 /// Header size steps from the -/+ buttons, and how much each step scales
 /// the avatar. Text and padding scale through the matching CSS classes.
@@ -132,10 +138,21 @@ pub const SplitHeader = extern struct {
         default_style: Style = .portrait,
         style_override: ?Style = null,
 
-        /// Size step chosen with the -/+ buttons, from size_min to size_max.
+        /// Size step, from size_min to size_max. It follows the configured
+        /// default until the -/+ buttons are used on this split.
         size_step: i8 = 0,
+        size_touched: bool = false,
+
+        /// The theme picker, built on first use and kept since the list of
+        /// themes doesn't change while running.
+        theme_picker: ?*gtk.Popover = null,
+        theme_search: ?*gtk.SearchEntry = null,
+        theme_list: ?*gtk.ListBox = null,
+
+        default_avatar_idle: ?c_uint = null,
 
         // Template binds
+        theme_button: *gtk.Button,
         style_button: *gtk.Button,
         smaller_button: *gtk.Button,
         larger_button: *gtk.Button,
@@ -195,6 +212,11 @@ pub const SplitHeader = extern struct {
         priv.git_timer = glib.timeoutAddSeconds(git_refresh_seconds, onGitTimer, self);
 
         self.applyStyle();
+
+        // During init the header isn't inside its surface yet, so the accent
+        // styles for the default avatar would have nothing to attach to.
+        priv.default_avatar_idle = glib.idleAdd(onDefaultAvatarIdle, self);
+
         self.updateTitle();
         self.updatePwd();
     }
@@ -242,6 +264,13 @@ pub const SplitHeader = extern struct {
 
     pub fn setDefaultStyle(self: *Self, style: Style) void {
         self.private().default_style = style;
+        self.applyStyle();
+    }
+
+    pub fn setDefaultSize(self: *Self, step: i8) void {
+        const priv = self.private();
+        if (priv.size_touched) return;
+        priv.size_step = std.math.clamp(step, size_min, size_max);
         self.applyStyle();
     }
 
@@ -305,12 +334,14 @@ pub const SplitHeader = extern struct {
     fn headerSmallerClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const priv = self.private();
         if (priv.size_step > size_min) priv.size_step -= 1;
+        priv.size_touched = true;
         self.applyStyle();
     }
 
     fn headerLargerClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const priv = self.private();
         if (priv.size_step < size_max) priv.size_step += 1;
+        priv.size_touched = true;
         self.applyStyle();
     }
 
@@ -572,6 +603,25 @@ pub const SplitHeader = extern struct {
         popover.popup();
     }
 
+    fn onDefaultAvatarIdle(ud: ?*anyopaque) callconv(.c) c_int {
+        const self: *Self = @ptrCast(@alignCast(ud orelse return 0));
+        self.private().default_avatar_idle = null;
+        self.loadDefaultAvatar();
+        return 0;
+    }
+
+    fn loadDefaultAvatar(self: *Self) void {
+        const config = Application.default().getConfig();
+        defer config.unref();
+        const name = config.get().@"split-header-default-avatar" orelse return;
+        var dir_buf: [4096]u8 = undefined;
+        const dir = avatarDir(&dir_buf) orelse return;
+        var path_buf: [4096]u8 = undefined;
+        const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir, name }) catch return;
+        if (glib.fileTest(path, .{ .is_regular = true }) == 0) return;
+        self.setAvatar(path);
+    }
+
     fn choiceClicked(button: *gtk.Button, self: *Self) callconv(.c) void {
         const name = std.mem.span(button.as(gtk.Widget).getName());
         if (self.private().picker) |p| p.popdown();
@@ -594,6 +644,142 @@ pub const SplitHeader = extern struct {
         defer texture.unref();
         priv.avatar_image.setFromPaintable(texture.as(gdk.Paintable));
         self.applyAccent(sampleAccent(texture));
+    }
+
+    //---------------------------------------------------------------
+    // Theme
+
+    fn themeClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        self.showThemePicker();
+    }
+
+    fn showThemePicker(self: *Self) void {
+        const priv = self.private();
+        if (priv.theme_picker) |popover| {
+            popover.popup();
+            return;
+        }
+
+        const list = gtk.ListBox.new();
+        list.setSelectionMode(.none);
+        list.setActivateOnSingleClick(1);
+        list.append(makeThemeRow(default_theme_name, "Default (from config)"));
+        appendThemeRows(list);
+        list.setFilterFunc(themeFilter, self, null);
+        _ = gtk.ListBox.signals.row_activated.connect(list, *Self, themeRowActivated, self, .{});
+
+        const search = gtk.SearchEntry.new();
+        _ = gtk.SearchEntry.signals.search_changed.connect(search, *Self, themeSearchChanged, self, .{});
+
+        const scroller = gtk.ScrolledWindow.new();
+        scroller.setPolicy(.never, .automatic);
+        scroller.setPropagateNaturalHeight(1);
+        scroller.setMaxContentHeight(360);
+        scroller.setMinContentWidth(240);
+        scroller.setChild(list.as(gtk.Widget));
+
+        const box = gtk.Box.new(.vertical, 6);
+        box.append(search.as(gtk.Widget));
+        box.append(scroller.as(gtk.Widget));
+
+        const popover = gtk.Popover.new();
+        popover.as(gtk.Widget).addCssClass("split-header-theme-picker");
+        popover.setChild(box.as(gtk.Widget));
+        popover.as(gtk.Widget).setParent(priv.theme_button.as(gtk.Widget));
+        // The button sits at the right edge of the split, so align the
+        // popover's right edge to it and let it open leftward.
+        popover.as(gtk.Widget).setHalign(.end);
+
+        priv.theme_picker = popover;
+        priv.theme_search = search;
+        priv.theme_list = list;
+        popover.popup();
+        _ = search.as(gtk.Widget).grabFocus();
+    }
+
+    fn makeThemeRow(value: [:0]const u8, text: [:0]const u8) *gtk.Widget {
+        const label = gtk.Label.new(text);
+        label.setXalign(0);
+        const label_widget = label.as(gtk.Widget);
+        label_widget.setMarginStart(8);
+        label_widget.setMarginEnd(8);
+        label_widget.setMarginTop(4);
+        label_widget.setMarginBottom(4);
+        const row = gtk.ListBoxRow.new();
+        row.setChild(label_widget);
+        row.as(gtk.Widget).setName(value);
+        return row.as(gtk.Widget);
+    }
+
+    fn appendThemeRows(list: *gtk.ListBox) void {
+        var arena: std.heap.ArenaAllocator = .init(std.heap.c_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        var names: std.ArrayList([:0]const u8) = .empty;
+        var it: themepkg.LocationIterator = .{ .arena_alloc = alloc };
+        while (it.next() catch null) |loc| {
+            var dir = std.Io.Dir.cwd().openDir(global.io(), loc.dir, .{ .iterate = true }) catch continue;
+            defer dir.close(global.io());
+            var walker = dir.iterate();
+            while (walker.next(global.io()) catch null) |entry| {
+                switch (entry.kind) {
+                    .file, .sym_link => {},
+                    else => continue,
+                }
+                if (std.mem.eql(u8, entry.name, ".DS_Store")) continue;
+                // User themes are listed first and shadow bundled ones of the
+                // same name, matching how themes are resolved.
+                if (containsName(names.items, entry.name)) continue;
+                const name = alloc.dupeZ(u8, entry.name) catch continue;
+                names.append(alloc, name) catch continue;
+            }
+        }
+
+        std.mem.sort([:0]const u8, names.items, {}, lessThanName);
+        for (names.items) |name| list.append(makeThemeRow(name, name));
+    }
+
+    fn containsName(names: []const [:0]const u8, name: []const u8) bool {
+        for (names) |existing| {
+            if (std.mem.eql(u8, existing, name)) return true;
+        }
+        return false;
+    }
+
+    fn lessThanName(_: void, a: [:0]const u8, b: [:0]const u8) bool {
+        return std.ascii.lessThanIgnoreCase(a, b);
+    }
+
+    fn themeFilter(row: *gtk.ListBoxRow, ud: ?*anyopaque) callconv(.c) c_int {
+        const self: *Self = @ptrCast(@alignCast(ud orelse return 1));
+        const search = self.private().theme_search orelse return 1;
+        const query = std.mem.span(search.as(gtk.Editable).getText());
+        if (query.len == 0) return 1;
+        const name = std.mem.span(row.as(gtk.Widget).getName());
+        return @intFromBool(std.ascii.findIgnoreCase(name, query) != null);
+    }
+
+    fn themeSearchChanged(_: *gtk.SearchEntry, self: *Self) callconv(.c) void {
+        if (self.private().theme_list) |list| list.invalidateFilter();
+    }
+
+    fn themeRowActivated(_: *gtk.ListBox, row: *gtk.ListBoxRow, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        const name = std.mem.span(row.as(gtk.Widget).getName());
+        const theme: [:0]const u8 = if (std.mem.eql(u8, name, default_theme_name)) "" else name;
+        if (priv.theme_picker) |p| p.popdown();
+        _ = self.as(gtk.Widget).activateActionVariant(
+            "surface.split-theme",
+            glib.Variant.newString(theme),
+        );
+
+        var tip_buf: [256]u8 = undefined;
+        const tip: [:0]const u8 = if (theme.len == 0)
+            "Terminal theme: from config"
+        else
+            std.fmt.bufPrintZ(&tip_buf, "Terminal theme: {s}", .{theme}) catch "Terminal theme";
+        priv.theme_button.as(gtk.Widget).setTooltipText(tip);
     }
 
     fn findSurface(self: *Self) ?*gtk.Widget {
@@ -775,6 +961,18 @@ pub const SplitHeader = extern struct {
             p.as(gtk.Widget).unparent();
             priv.picker = null;
         }
+        if (priv.theme_picker) |p| {
+            p.as(gtk.Widget).unparent();
+            priv.theme_picker = null;
+            priv.theme_search = null;
+            priv.theme_list = null;
+        }
+        if (priv.default_avatar_idle) |v| {
+            if (glib.Source.remove(v) == 0) {
+                log.warn("unable to remove split header default avatar idler", .{});
+            }
+            priv.default_avatar_idle = null;
+        }
         self.removeAccentProvider();
 
         gtk.Widget.disposeTemplate(
@@ -825,6 +1023,7 @@ pub const SplitHeader = extern struct {
             );
 
             // Bindings
+            class.bindTemplateChildPrivate("theme_button", .{});
             class.bindTemplateChildPrivate("style_button", .{});
             class.bindTemplateChildPrivate("smaller_button", .{});
             class.bindTemplateChildPrivate("larger_button", .{});
@@ -847,6 +1046,7 @@ pub const SplitHeader = extern struct {
 
             // Template Callbacks
             class.bindTemplateCallback("avatar_clicked", &avatarClicked);
+            class.bindTemplateCallback("theme_clicked", &themeClicked);
             class.bindTemplateCallback("cycle_style", &cycleStyleClicked);
             class.bindTemplateCallback("header_smaller", &headerSmallerClicked);
             class.bindTemplateCallback("header_larger", &headerLargerClicked);

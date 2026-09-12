@@ -1891,6 +1891,11 @@ pub const Surface = extern struct {
                 actionSplitHeaderStyle,
                 s_variant_type,
             ),
+            .init(
+                "split-theme",
+                actionSplitTheme,
+                s_variant_type,
+            ),
             .initStateful(
                 "notify-on-next-command-finish",
                 actionNotifyOnNextCommandFinish,
@@ -2417,6 +2422,7 @@ pub const Surface = extern struct {
         // With split headers each surface is inset and rounded so splits read
         // as separate blocks.
         priv.split_header.setDefaultStyle(config.@"split-header-style");
+        priv.split_header.setDefaultSize(config.@"split-header-size");
         self.syncSplitHeader();
     }
 
@@ -2690,6 +2696,31 @@ pub const Surface = extern struct {
         priv.split_header.setStyleOverride(style);
         priv.split_header_forced = true;
         self.syncSplitHeader();
+    }
+
+    /// Use a theme for just this split. An empty name goes back to the
+    /// configured theme.
+    pub fn actionSplitTheme(
+        _: *gio.SimpleAction,
+        args_: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const args = args_ orelse {
+            log.warn("surface.split-theme called without a parameter", .{});
+            return;
+        };
+        var value: ?[*:0]const u8 = null;
+        args.get("&s", &value);
+        const name = std.mem.span(value orelse return);
+        const core_surface = self.core() orelse return;
+        const app_config = Application.default().getConfig();
+        defer app_config.unref();
+        core_surface.setThemeOverride(
+            if (name.len == 0) null else name,
+            app_config.get(),
+        ) catch |err| {
+            log.warn("unable to apply split theme err={}", .{err});
+        };
     }
 
     /// Show the split header, along with the inset and rounded surface that

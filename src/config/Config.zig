@@ -1101,6 +1101,11 @@ palette: Palette = .{},
 /// directory, for example `~/.config/ghostty/avatars`.
 @"split-header-avatar-dir": ?[:0]const u8 = null,
 
+/// The avatar shown in split headers that haven't had one picked, as a file
+/// name inside `split-header-avatar-dir`. If the file doesn't exist the
+/// header shows a placeholder icon instead.
+@"split-header-default-avatar": ?[:0]const u8 = "sutts_avatar.jpg",
+
 /// The layout of the split header when `split-header` is enabled. Each split
 /// can also pick its own style from the context menu.
 ///
@@ -1113,6 +1118,11 @@ palette: Palette = .{},
 ///   * `rail` - A compact round avatar and the title, with the details in a
 ///     full-width strip underneath.
 @"split-header-style": SplitHeaderStyle = .portrait,
+
+/// The default size of split headers, in the same steps as the -/+ buttons
+/// on the header: from -2 (smallest) to 3 (largest), with 0 as the standard
+/// size. Values outside that range are clamped.
+@"split-header-size": i8 = 0,
 
 /// Control when Ghostty preserves a zoomed split. Under normal circumstances,
 /// any operation that changes focus or layout of the split tree in a window
@@ -4545,6 +4555,43 @@ pub fn changeConditionalState(
     try new_config.loadIter(alloc_gpa, &it);
     try new_config.finalize();
 
+    return new_config;
+}
+
+/// Returns a copy of this configuration with `theme` set to `name`, as if a
+/// `theme` line had been appended to it. The line becomes part of the replay
+/// steps so it survives later conditional replays such as a light/dark
+/// switch, and, as with the configured theme, explicit settings still
+/// override the theme's values.
+pub fn withTheme(self: *const Config, name: []const u8) !Config {
+    const alloc_gpa = self._arena.?.child_allocator;
+    var new_config = try self.cloneEmpty(alloc_gpa);
+    errdefer new_config.deinit();
+    new_config._conditional_state = self._conditional_state;
+
+    // Everything after "-e" becomes the initial command, so the theme has to
+    // be inserted before it.
+    const steps = self._replay_steps.items;
+    const split = for (steps, 0..) |step, i| {
+        if (step == .@"-e") break i;
+    } else steps.len;
+
+    var head = Replay.iterator(steps[0..split], &new_config);
+    try new_config.loadIter(alloc_gpa, &head);
+
+    const theme_arg = try std.fmt.allocPrint(
+        new_config._arena.?.allocator(),
+        "--theme={s}",
+        .{name},
+    );
+    const theme_args = [_][]const u8{theme_arg};
+    var theme_it = cli.args.sliceIterator(&theme_args);
+    try new_config.loadIter(alloc_gpa, &theme_it);
+
+    var tail = Replay.iterator(steps[split..], &new_config);
+    try new_config.loadIter(alloc_gpa, &tail);
+
+    try new_config.finalize();
     return new_config;
 }
 

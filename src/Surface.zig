@@ -146,6 +146,11 @@ config: DerivedConfig,
 /// is sent whenever this changes.
 config_conditional_state: configpkg.ConditionalState,
 
+/// A theme chosen for just this surface. It's applied on top of every
+/// config this surface receives, including app-wide reloads, so it isn't
+/// lost when the configuration changes. Owned by `alloc`.
+theme_override: ?[:0]const u8 = null,
+
 /// This is set to true if our IO thread notifies us our child exited.
 /// This is used to determine if we need to confirm, hold open, etc.
 child_exited: bool = false,
@@ -798,6 +803,8 @@ pub fn init(
 }
 
 pub fn deinit(self: *Surface) void {
+    if (self.theme_override) |v| self.alloc.free(v);
+
     // Stop search thread
     if (self.search) |*s| s.deinit();
 
@@ -1745,9 +1752,20 @@ pub fn updateConfig(
     self: *Surface,
     original: *const configpkg.Config,
 ) !void {
+    // Apply this surface's own theme, if one was chosen, before anything else
+    // so that conditional replays below keep it.
+    var themed_: ?configpkg.Config = if (self.theme_override) |name|
+        original.withTheme(name) catch |err| themed: {
+            log.warn("failed to apply surface theme override err={}", .{err});
+            break :themed null;
+        }
+    else
+        null;
+    defer if (themed_) |*c| c.deinit();
+    const base: *const configpkg.Config = if (themed_) |*c| c else original;
     // Apply our conditional state. If we fail to apply the conditional state
     // then we log and attempt to move forward with the old config.
-    var config_: ?configpkg.Config = original.changeConditionalState(
+    var config_: ?configpkg.Config = base.changeConditionalState(
         self.config_conditional_state,
     ) catch |err| err: {
         log.warn("failed to apply conditional state to config err={}", .{err});
@@ -1757,7 +1775,7 @@ pub fn updateConfig(
 
     // We want a config pointer for everything so we get that either
     // based on our conditional state or the original config.
-    const config: *const configpkg.Config = if (config_) |*c| c else original;
+    const config: *const configpkg.Config = if (config_) |*c| c else base;
 
     // Update our new derived config immediately
     const derived = DerivedConfig.init(self.alloc, config) catch |err| {
@@ -1843,6 +1861,20 @@ pub fn updateConfig(
         .config_change,
         .{ .config = config },
     );
+}
+
+/// Use `name` as the theme for just this surface, or pass null to go back
+/// to the configured theme. `base` is the application configuration the
+/// surface's config is derived from.
+pub fn setThemeOverride(
+    self: *Surface,
+    name: ?[]const u8,
+    base: *const configpkg.Config,
+) !void {
+    const new_override = if (name) |v| try self.alloc.dupeZ(u8, v) else null;
+    if (self.theme_override) |v| self.alloc.free(v);
+    self.theme_override = new_override;
+    try self.updateConfig(base);
 }
 
 const InitialSizeError = error{

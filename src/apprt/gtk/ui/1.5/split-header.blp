@@ -188,6 +188,22 @@ template $GhosttySplitHeader: Adw.Bin {
 
           valign: start;
 
+          Button theme_button {
+            styles [
+              "flat",
+            ]
+
+            icon-name: "preferences-desktop-appearance-symbolic";
+            tooltip-text: _("Terminal Theme");
+            focusable: false;
+            focus-on-click: false;
+            clicked => $theme_clicked();
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+          }
+
           Button style_button {
             styles [
               "flat",
