@@ -42,6 +42,13 @@ const accent_hue_bins = 36;
 /// for an image path.
 const no_avatar_name = "none";
 
+/// Header size steps from the -/+ buttons, and how much each step scales
+/// the avatar. Text and padding scale through the matching CSS classes.
+const size_min: i8 = -2;
+const size_max: i8 = 3;
+const size_step_scale = 0.12;
+const size_classes = [_][:0]const u8{ "size-m2", "size-m1", "size-0", "size-p1", "size-p2", "size-p3" };
+
 var next_style_id: u32 = 0;
 
 // The generated binding types the return value as non-null, but GLib
@@ -125,7 +132,13 @@ pub const SplitHeader = extern struct {
         default_style: Style = .portrait,
         style_override: ?Style = null,
 
+        /// Size step chosen with the -/+ buttons, from size_min to size_max.
+        size_step: i8 = 0,
+
         // Template binds
+        style_button: *gtk.Button,
+        smaller_button: *gtk.Button,
+        larger_button: *gtk.Button,
         avatar_button: *gtk.Button,
         avatar_image: *gtk.Image,
         avatar_fade: *gtk.Widget,
@@ -257,12 +270,48 @@ pub const SplitHeader = extern struct {
         moveChild(from, to, priv.git_box);
         priv.rail_row.as(gtk.Widget).setVisible(@intFromBool(in_rail));
 
-        priv.avatar_image.setPixelSize(switch (style) {
+        const base_size: f64 = switch (style) {
             .portrait => 44,
             .banner => 64,
             .rail => 32,
-        });
+        };
+        const scale = 1.0 + size_step_scale * @as(f64, @floatFromInt(priv.size_step));
+        priv.avatar_image.setPixelSize(@intFromFloat(@round(base_size * scale)));
         priv.avatar_fade.setVisible(@intFromBool(style == .banner));
+
+        const size_idx: usize = @intCast(priv.size_step - size_min);
+        for (size_classes, 0..) |class, i| {
+            if (i == size_idx) {
+                root.addCssClass(class);
+            } else {
+                root.removeCssClass(class);
+            }
+        }
+        priv.smaller_button.as(gtk.Widget).setSensitive(@intFromBool(priv.size_step > size_min));
+        priv.larger_button.as(gtk.Widget).setSensitive(@intFromBool(priv.size_step < size_max));
+
+        var tip_buf: [64]u8 = undefined;
+        const tip = std.fmt.bufPrintZ(&tip_buf, "Header style: {s} (click for next)", .{@tagName(style)}) catch "Change header style";
+        priv.style_button.as(gtk.Widget).setTooltipText(tip);
+    }
+
+    fn cycleStyleClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        const current = priv.style_override orelse priv.default_style;
+        const count = std.meta.fields(Style).len;
+        self.setStyleOverride(@enumFromInt((@as(usize, @intFromEnum(current)) + 1) % count));
+    }
+
+    fn headerSmallerClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.size_step > size_min) priv.size_step -= 1;
+        self.applyStyle();
+    }
+
+    fn headerLargerClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.size_step < size_max) priv.size_step += 1;
+        self.applyStyle();
     }
 
     fn moveChild(from: *gtk.Box, to: *gtk.Box, child: *gtk.Widget) void {
@@ -506,10 +555,17 @@ pub const SplitHeader = extern struct {
         scroller.setPropagateNaturalWidth(1);
         scroller.setPropagateNaturalHeight(1);
         scroller.setMaxContentHeight(360);
+        // Five 48px columns plus room for the overlay scrollbar, which
+        // otherwise covers the last column.
+        scroller.setMinContentWidth(340);
+        flow.as(gtk.Widget).setMarginEnd(12);
         scroller.setChild(flow.as(gtk.Widget));
 
         const popover = gtk.Popover.new();
         popover.as(gtk.Widget).addCssClass("split-header-picker");
+        // The avatar sits at the split's left edge, so a centred popover would
+        // spill out past it; align it to the avatar so it opens rightward.
+        popover.as(gtk.Widget).setHalign(.start);
         popover.setChild(scroller.as(gtk.Widget));
         popover.as(gtk.Widget).setParent(priv.avatar_button.as(gtk.Widget));
         priv.picker = popover;
@@ -769,6 +825,9 @@ pub const SplitHeader = extern struct {
             );
 
             // Bindings
+            class.bindTemplateChildPrivate("style_button", .{});
+            class.bindTemplateChildPrivate("smaller_button", .{});
+            class.bindTemplateChildPrivate("larger_button", .{});
             class.bindTemplateChildPrivate("avatar_button", .{});
             class.bindTemplateChildPrivate("avatar_image", .{});
             class.bindTemplateChildPrivate("avatar_fade", .{});
@@ -788,6 +847,9 @@ pub const SplitHeader = extern struct {
 
             // Template Callbacks
             class.bindTemplateCallback("avatar_clicked", &avatarClicked);
+            class.bindTemplateCallback("cycle_style", &cycleStyleClicked);
+            class.bindTemplateCallback("header_smaller", &headerSmallerClicked);
+            class.bindTemplateCallback("header_larger", &headerLargerClicked);
 
             // Properties
             gobject.ext.registerProperties(class, &.{

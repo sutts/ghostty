@@ -179,6 +179,62 @@ template $GhosttySplitHeader: Adw.Bin {
             }
           }
         }
+
+        Box {
+          styles [
+            "header-controls",
+            "linked",
+          ]
+
+          valign: start;
+
+          Button style_button {
+            styles [
+              "flat",
+            ]
+
+            icon-name: "view-dual-symbolic";
+            focusable: false;
+            focus-on-click: false;
+            clicked => $cycle_style();
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+          }
+
+          Button smaller_button {
+            styles [
+              "flat",
+            ]
+
+            icon-name: "list-remove-symbolic";
+            tooltip-text: _("Smaller Header");
+            focusable: false;
+            focus-on-click: false;
+            clicked => $header_smaller();
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+          }
+
+          Button larger_button {
+            styles [
+              "flat",
+            ]
+
+            icon-name: "list-add-symbolic";
+            tooltip-text: _("Larger Header");
+            focusable: false;
+            focus-on-click: false;
+            clicked => $header_larger();
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+          }
+        }
       }
 
       Box rail_row {

@@ -158,6 +158,60 @@ label.resize-overlay {
   background: none;
 }
 
+.split-header .header-controls {
+  opacity: 0.35;
+  transition: opacity 150ms;
+}
+
+.split-header:hover .header-controls {
+  opacity: 1;
+}
+
+.split-header .header-controls button {
+  min-width: 22px;
+  min-height: 22px;
+  padding: 1px;
+}
+
+/* Header sizes from the -/+ buttons. Labels inherit the font size; the
+ * banner style keeps its own flush padding, so it is declared after these. */
+.split-header.size-m2 {
+  font-size: 0.85em;
+}
+
+.split-header.size-m1 {
+  font-size: 0.93em;
+}
+
+.split-header.size-p1 {
+  font-size: 1.08em;
+}
+
+.split-header.size-p2 {
+  font-size: 1.16em;
+}
+
+.split-header.size-p3 {
+  font-size: 1.25em;
+}
+
+.split-header.size-m2 .split-header-top,
+.split-header.size-m1 .split-header-top {
+  padding: 3px 8px 3px 8px;
+}
+
+.split-header.size-p1 .split-header-top {
+  padding: 8px 10px 8px 10px;
+}
+
+.split-header.size-p2 .split-header-top {
+  padding: 10px 10px 10px 10px;
+}
+
+.split-header.size-p3 .split-header-top {
+  padding: 12px 12px 12px 12px;
+}
+
 .split-header.style-banner .split-header-top {
   padding: 0 8px 0 0;
 }
