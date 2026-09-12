@@ -641,6 +641,10 @@ pub const Surface = extern struct {
         /// The header above the terminal, shown when `split-header` is set.
         split_header: *SplitHeader,
 
+        /// True once a header style has been picked for this split from the
+        /// context menu, which shows the header even if the config doesn't.
+        split_header_forced: bool = false,
+
         /// The apprt Surface.
         rt_surface: ApprtSurface = undefined,
 
@@ -2410,20 +2414,10 @@ pub const Surface = extern struct {
             );
         }
 
-        priv.split_header.as(gtk.Widget).setVisible(@intFromBool(config.@"split-header"));
-        priv.split_header.setDefaultStyle(config.@"split-header-style");
-
         // With split headers each surface is inset and rounded so splits read
-        // as separate blocks. Clipping to the rounded corners is what keeps
-        // the terminal's own drawing inside them.
-        const widget = self.as(gtk.Widget);
-        if (config.@"split-header") {
-            widget.addCssClass("split-header-on");
-            widget.setOverflow(.hidden);
-        } else {
-            widget.removeCssClass("split-header-on");
-            widget.setOverflow(.visible);
-        }
+        // as separate blocks.
+        priv.split_header.setDefaultStyle(config.@"split-header-style");
+        self.syncSplitHeader();
     }
 
     fn propError(
@@ -2692,7 +2686,31 @@ pub const Surface = extern struct {
             log.warn("unknown split header style", .{});
             return;
         };
-        self.private().split_header.setStyleOverride(style);
+        const priv = self.private();
+        priv.split_header.setStyleOverride(style);
+        priv.split_header_forced = true;
+        self.syncSplitHeader();
+    }
+
+    /// Show the split header, along with the inset and rounded surface that
+    /// goes with it, when the config enables it or a style was picked for
+    /// this split from the context menu.
+    fn syncSplitHeader(self: *Self) void {
+        const priv = self.private();
+        const from_config = if (priv.config) |c| c.get().@"split-header" else false;
+        const enabled = priv.split_header_forced or from_config;
+        priv.split_header.as(gtk.Widget).setVisible(@intFromBool(enabled));
+
+        // Clipping to the rounded corners is what keeps the terminal's own
+        // drawing inside them.
+        const widget = self.as(gtk.Widget);
+        if (enabled) {
+            widget.addCssClass("split-header-on");
+            widget.setOverflow(.hidden);
+        } else {
+            widget.removeCssClass("split-header-on");
+            widget.setOverflow(.visible);
+        }
     }
 
     pub fn actionNotifyOnNextCommandFinish(

@@ -1092,8 +1092,9 @@ palette: Palette = .{},
 /// The working directory requires shell integration (or any program that
 /// reports it with OSC 7). Git information is only shown for local paths.
 ///
-/// This is currently only supported on Linux (GTK).
-@"split-header": bool = false,
+/// This is currently only supported on Linux (GTK). This fork enables it by
+/// default.
+@"split-header": bool = true,
 
 /// The directory the split header avatar picker lists images from. PNG, JPEG
 /// and WebP files are shown. Defaults to `avatars` inside the Ghostty config

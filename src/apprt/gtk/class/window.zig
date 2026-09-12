@@ -1965,9 +1965,13 @@ pub const Window = extern struct {
         _: ?*glib.Variant,
         self: *Self,
     ) callconv(.c) void {
-        const name = "Ghostty";
+        const name = "Ghostty · Sutts Build";
         const icon = "com.mitchellh.ghostty";
-        const website = "https://ghostty.org";
+        const website = "https://github.com/sutts/ghostty";
+        const comments = "A personal build of Ghostty with split headers: an avatar, " ++
+            "the working directory and git status for every split.\n\n" ++
+            "Based on Ghostty by Mitchell Hashimoto and the Ghostty developers " ++
+            "(https://ghostty.org). Not an official release.";
 
         if (adw_version.supportsDialogs()) {
             adw.showAboutDialog(
@@ -1975,13 +1979,15 @@ pub const Window = extern struct {
                 "application-name",
                 name,
                 "developer-name",
-                i18n._("Ghostty Developers"),
+                "Sutts, on top of the Ghostty Developers' work",
                 "application-icon",
                 icon,
                 "version",
                 build_config.version_string.ptr,
+                "comments",
+                comments,
                 "issue-url",
-                "https://github.com/ghostty-org/ghostty/issues",
+                "https://github.com/sutts/ghostty/issues",
                 "website",
                 website,
                 @as(?*anyopaque, null),
@@ -1994,9 +2000,11 @@ pub const Window = extern struct {
                 "logo-icon-name",
                 icon,
                 "title",
-                i18n._("About Ghostty"),
+                "About Ghostty · Sutts Build",
                 "version",
                 build_config.version_string.ptr,
+                "comments",
+                comments,
                 "website",
                 website,
                 @as(?*anyopaque, null),
