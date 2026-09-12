@@ -1084,6 +1084,35 @@ palette: Palette = .{},
 /// Available since: 1.1.0
 @"split-divider-color": ?Color = null,
 
+/// Show a header above each terminal surface with an avatar, the title, the
+/// working directory, and the git branch and diff stats for that directory.
+/// Clicking the avatar picks an image from `split-header-avatar-dir`; the
+/// header colors and an outline around the surface are derived from it.
+///
+/// The working directory requires shell integration (or any program that
+/// reports it with OSC 7). Git information is only shown for local paths.
+///
+/// This is currently only supported on Linux (GTK).
+@"split-header": bool = false,
+
+/// The directory the split header avatar picker lists images from. PNG, JPEG
+/// and WebP files are shown. Defaults to `avatars` inside the Ghostty config
+/// directory, for example `~/.config/ghostty/avatars`.
+@"split-header-avatar-dir": ?[:0]const u8 = null,
+
+/// The layout of the split header when `split-header` is enabled. Each split
+/// can also pick its own style from the context menu.
+///
+///   * `portrait` - A rounded avatar beside the title, with the working
+///     directory on the left and git information on the right below it.
+///
+///   * `banner` - A larger avatar flush to the edge that fades into the
+///     header, with the details shown as pills.
+///
+///   * `rail` - A compact round avatar and the title, with the details in a
+///     full-width strip underneath.
+@"split-header-style": SplitHeaderStyle = .portrait,
+
 /// Control when Ghostty preserves a zoomed split. Under normal circumstances,
 /// any operation that changes focus or layout of the split tree in a window
 /// will unzoom any zoomed split. This configuration allows you to control
@@ -9445,6 +9474,13 @@ pub const ResizeOverlay = enum {
     always,
     never,
     @"after-first",
+};
+
+/// See split-header-style
+pub const SplitHeaderStyle = enum {
+    portrait,
+    banner,
+    rail,
 };
 
 /// See resize-overlay-position

@@ -18,6 +18,23 @@ Overlay terminal_page {
   focus-on-click: false;
 
   child: Box {
+    orientation: vertical;
+    hexpand: true;
+    vexpand: true;
+
+    // Visibility is set from propConfig: the surface's config is assigned
+    // during init without a notify, so a binding on it would never update.
+    $GhosttySplitHeader split_header {
+      visible: false;
+      pwd: bind template.pwd;
+      title: bind template.title;
+      title-override: bind template.title-override;
+    }
+
+    // The terminal's input controllers live on this box rather than the
+    // outer one so clicks and scrolls on the split header never reach the
+    // terminal with header-relative coordinates.
+    Box {
     hexpand: true;
     vexpand: true;
 
@@ -76,6 +93,7 @@ Overlay terminal_page {
       pressed => $mouse_down();
       released => $mouse_up();
       button: 0;
+    }
     }
   };
 
@@ -148,6 +166,21 @@ Overlay terminal_page {
       halign: fill;
       valign: fill;
     }
+  }
+
+  [overlay]
+  // Outline in the split header avatar's accent color. It has no border
+  // until the header installs a per-surface style for the chosen avatar.
+  Box split_accent_border {
+    styles [
+      "split-accent-border",
+    ]
+
+    halign: fill;
+    valign: fill;
+    can-focus: false;
+    can-target: false;
+    focusable: false;
   }
 
   [overlay]
@@ -347,6 +380,28 @@ menu context_menu_model {
       item {
         label: _("Change Title…");
         action: "surface.prompt-title";
+      }
+
+      submenu {
+        label: _("Header Style");
+
+        item {
+          label: _("Portrait");
+          action: "surface.split-header-style";
+          target: "portrait";
+        }
+
+        item {
+          label: _("Banner");
+          action: "surface.split-header-style";
+          target: "banner";
+        }
+
+        item {
+          label: _("Rail");
+          action: "surface.split-header-style";
+          target: "rail";
+        }
       }
 
       item {

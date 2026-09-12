@@ -29,6 +29,7 @@ const Config = @import("config.zig").Config;
 const ResizeOverlay = @import("resize_overlay.zig").ResizeOverlay;
 const SearchOverlay = @import("search_overlay.zig").SearchOverlay;
 const KeyStateOverlay = @import("key_state_overlay.zig").KeyStateOverlay;
+const SplitHeader = @import("split_header.zig").SplitHeader;
 const ChildExited = @import("surface_child_exited.zig").SurfaceChildExited;
 const ClipboardConfirmationDialog = @import("clipboard_confirmation_dialog.zig").ClipboardConfirmationDialog;
 const TitleDialog = @import("title_dialog.zig").TitleDialog;
@@ -637,6 +638,9 @@ pub const Surface = extern struct {
         /// The key state overlay
         key_state_overlay: *KeyStateOverlay,
 
+        /// The header above the terminal, shown when `split-header` is set.
+        split_header: *SplitHeader,
+
         /// The apprt Surface.
         rt_surface: ApprtSurface = undefined,
 
@@ -850,7 +854,6 @@ pub const Surface = extern struct {
 
         return @intFromBool(config.@"bell-features".border);
     }
-
     pub fn bindIsSplit(self: *Self, tree: *SplitTree) void {
         const priv = self.private();
         if (priv.is_split_binding) |binding| {
@@ -1870,11 +1873,19 @@ pub const Surface = extern struct {
     fn initActionMap(self: *Self) void {
         const priv: *Private = self.private();
 
+        const s_variant_type = glib.ext.VariantType.newFor([:0]const u8);
+        defer s_variant_type.free();
+
         const actions = [_]ext.actions.Action(Self){
             .init(
                 "prompt-title",
                 actionPromptTitle,
                 null,
+            ),
+            .init(
+                "split-header-style",
+                actionSplitHeaderStyle,
+                s_variant_type,
             ),
             .initStateful(
                 "notify-on-next-command-finish",
@@ -2398,6 +2409,21 @@ pub const Surface = extern struct {
                 &valign,
             );
         }
+
+        priv.split_header.as(gtk.Widget).setVisible(@intFromBool(config.@"split-header"));
+        priv.split_header.setDefaultStyle(config.@"split-header-style");
+
+        // With split headers each surface is inset and rounded so splits read
+        // as separate blocks. Clipping to the rounded corners is what keeps
+        // the terminal's own drawing inside them.
+        const widget = self.as(gtk.Widget);
+        if (config.@"split-header") {
+            widget.addCssClass("split-header-on");
+            widget.setOverflow(.hidden);
+        } else {
+            widget.removeCssClass("split-header-on");
+            widget.setOverflow(.visible);
+        }
     }
 
     fn propError(
@@ -2646,6 +2672,27 @@ pub const Surface = extern struct {
         _ = surface.performBindingAction(.prompt_surface_title) catch |err| {
             log.warn("unable to perform prompt title action err={}", .{err});
         };
+    }
+
+    pub fn actionSplitHeaderStyle(
+        _: *gio.SimpleAction,
+        args_: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const args = args_ orelse {
+            log.warn("surface.split-header-style called without a parameter", .{});
+            return;
+        };
+        var value: ?[*:0]const u8 = null;
+        args.get("&s", &value);
+        const style = std.meta.stringToEnum(
+            configpkg.Config.SplitHeaderStyle,
+            std.mem.span(value orelse return),
+        ) orelse {
+            log.warn("unknown split header style", .{});
+            return;
+        };
+        self.private().split_header.setStyleOverride(style);
     }
 
     pub fn actionNotifyOnNextCommandFinish(
@@ -3868,6 +3915,7 @@ pub const Surface = extern struct {
             gobject.ext.ensureType(ResizeOverlay);
             gobject.ext.ensureType(SearchOverlay);
             gobject.ext.ensureType(KeyStateOverlay);
+            gobject.ext.ensureType(SplitHeader);
             gobject.ext.ensureType(ChildExited);
             gtk.Widget.Class.setTemplateFromResource(
                 class.as(gtk.Widget.Class),
@@ -3889,6 +3937,7 @@ pub const Surface = extern struct {
             class.bindTemplateChildPrivate("resize_overlay", .{});
             class.bindTemplateChildPrivate("search_overlay", .{});
             class.bindTemplateChildPrivate("key_state_overlay", .{});
+            class.bindTemplateChildPrivate("split_header", .{});
             class.bindTemplateChildPrivate("terminal_page", .{});
             class.bindTemplateChildPrivate("drop_target", .{});
             class.bindTemplateChildPrivate("surface_drop_target", .{});

@@ -1,0 +1,195 @@
+using Gtk 4.0;
+using Gdk 4.0;
+using Adw 1;
+
+// The working directory and git boxes live in info_row for the portrait and
+// banner styles and are moved into rail_row for the rail style.
+template $GhosttySplitHeader: Adw.Bin {
+  styles [
+    "split-header",
+  ]
+
+  // See surface.blp for why we need to wrap this.
+  Adw.Bin {
+    Box {
+      orientation: vertical;
+
+      Box {
+        styles [
+          "split-header-top",
+        ]
+
+        orientation: horizontal;
+        spacing: 10;
+
+        Overlay {
+          valign: center;
+
+          child: Button avatar_button {
+            styles [
+              "flat",
+              "avatar-button",
+            ]
+
+            focusable: false;
+            focus-on-click: false;
+            overflow: hidden;
+            tooltip-text: _("Choose Avatar");
+            clicked => $avatar_clicked();
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+
+            Image avatar_image {
+              icon-name: "avatar-default-symbolic";
+              pixel-size: 44;
+            }
+          };
+
+          [overlay]
+          Box avatar_fade {
+            styles [
+              "avatar-fade",
+            ]
+
+            visible: false;
+            can-focus: false;
+            can-target: false;
+            focusable: false;
+          }
+        }
+
+        Box {
+          orientation: vertical;
+          valign: center;
+          hexpand: true;
+          spacing: 3;
+
+          Label title_label {
+            styles [
+              "title-label",
+            ]
+
+            xalign: 0.0;
+            ellipsize: end;
+            single-line-mode: true;
+          }
+
+          Box info_row {
+            orientation: horizontal;
+            spacing: 14;
+
+            Box pwd_box {
+              styles [
+                "info-pill",
+              ]
+
+              spacing: 5;
+
+              Image {
+                styles [
+                  "dim",
+                ]
+
+                icon-name: "folder-symbolic";
+                pixel-size: 12;
+              }
+
+              Label pwd_label {
+                styles [
+                  "dim",
+                  "mono",
+                ]
+
+                xalign: 0.0;
+                ellipsize: start;
+                single-line-mode: true;
+              }
+            }
+
+            Box git_box {
+              hexpand: true;
+              halign: end;
+              spacing: 8;
+
+              Box branch_box {
+                styles [
+                  "info-pill",
+                ]
+
+                visible: false;
+                spacing: 5;
+
+                Label {
+                  styles [
+                    "dim",
+                  ]
+
+                  label: "⎇";
+                }
+
+                Label branch_label {
+                  styles [
+                    "mono",
+                  ]
+
+                  ellipsize: end;
+                  max-width-chars: 32;
+                  single-line-mode: true;
+                }
+              }
+
+              Box stats_box {
+                styles [
+                  "info-pill",
+                ]
+
+                visible: false;
+                spacing: 5;
+
+                Label files_label {
+                  styles [
+                    "dim",
+                    "mono",
+                  ]
+                }
+
+                Label add_label {
+                  styles [
+                    "mono",
+                    "diff-add",
+                  ]
+                }
+
+                Label del_label {
+                  styles [
+                    "mono",
+                    "diff-del",
+                  ]
+                }
+
+                Label untracked_label {
+                  styles [
+                    "dim",
+                    "mono",
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+
+      Box rail_row {
+        styles [
+          "split-header-rail",
+        ]
+
+        visible: false;
+        orientation: horizontal;
+        spacing: 14;
+      }
+    }
+  }
+}

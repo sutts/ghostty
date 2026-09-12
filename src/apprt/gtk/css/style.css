@@ -134,6 +134,91 @@ label.resize-overlay {
   border-style: solid;
 }
 
+/*
+ * Split header
+ */
+.surface.split-header-on {
+  margin: 3px;
+  border-radius: 7px;
+}
+
+.split-accent-border {
+  border-radius: 7px;
+}
+
+.split-header {
+  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+}
+
+.split-header .split-header-top {
+  padding: 6px 8px 6px 8px;
+}
+
+.split-header .avatar-fade {
+  background: none;
+}
+
+.split-header.style-banner .split-header-top {
+  padding: 0 8px 0 0;
+}
+
+.split-header.style-banner .avatar-button {
+  border-radius: 0;
+}
+
+.split-header.style-banner .info-pill {
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.split-header.style-rail .avatar-button {
+  border-radius: 999px;
+}
+
+.split-header .split-header-rail {
+  padding: 3px 8px 3px 8px;
+  background-color: rgba(0, 0, 0, 0.18);
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+}
+
+.split-header .avatar-button {
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 12px;
+}
+
+.split-header .title-label {
+  font-weight: bold;
+  font-size: 1.05em;
+}
+
+.split-header .dim {
+  opacity: 0.7;
+}
+
+.split-header .mono {
+  font-family: monospace;
+  font-size: 0.85em;
+}
+
+.split-header .diff-add {
+  color: #4ade80;
+}
+
+.split-header .diff-del {
+  color: #f87171;
+}
+
+.split-header-picker .avatar-choice {
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 8px;
+}
+
 .surface .readonly_overlay {
   /* Should be the equivalent of the following SwiftUI color: */
   /* Color(hue: 0.08, saturation: 0.5, brightness: 0.8) */
