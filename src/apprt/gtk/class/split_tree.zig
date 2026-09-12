@@ -93,6 +93,25 @@ pub const SplitTree = extern struct {
             );
         };
 
+        pub const @"is-expanded" = struct {
+            pub const name = "is-expanded";
+            const impl = gobject.ext.defineProperty(
+                name,
+                Self,
+                bool,
+                .{
+                    .default = false,
+                    .accessor = gobject.ext.typedAccessor(
+                        Self,
+                        bool,
+                        .{
+                            .getter = getIsExpanded,
+                        },
+                    ),
+                },
+            );
+        };
+
         pub const tree = struct {
             pub const name = "tree";
             const impl = gobject.ext.defineProperty(
@@ -149,6 +168,17 @@ pub const SplitTree = extern struct {
 
         // Template bindings
         tree_bin: *adw.Bin,
+        expand_overlay: *gtk.Overlay,
+        expand_backdrop: *gtk.Box,
+        expand_container: *gtk.Box,
+        expand_bin: *adw.Bin,
+
+        /// Currently expanded surface (modal overlay) if any.
+        expanded_surface: WeakRef(Surface) = .empty,
+
+        /// Margins computed when expanded
+        margin_x: c_int = 0,
+        margin_y: c_int = 0,
 
         /// Last focused surface in the tree. We need this to handle various
         /// tree change states.
@@ -193,6 +223,7 @@ pub const SplitTree = extern struct {
             .init("new-split", actionNewSplit, s_variant_type),
             .init("equalize", actionEqualize, null),
             .init("zoom", actionZoom, null),
+            .init("expand", actionExpand, null),
             .init("close-split", actionCloseSplit, null),
         };
 
@@ -571,6 +602,14 @@ pub const SplitTree = extern struct {
         return tree.zoomed != null;
     }
 
+    pub fn getIsExpanded(self: *Self) bool {
+        if (self.private().expanded_surface.get()) |s| {
+            s.unref();
+            return true;
+        }
+        return false;
+    }
+
     /// Get the tree data model that we're showing in this widget. This
     /// does not clone the tree.
     pub fn getTree(self: *Self) ?*Surface.Tree {
@@ -647,6 +686,8 @@ pub const SplitTree = extern struct {
 
     fn dispose(self: *Self) callconv(.c) void {
         const priv = self.private();
+        priv.expanded_surface.deinit();
+        priv.expand_bin.setChild(null);
         priv.last_focused.deinit();
         if (priv.rebuild_source) |v| {
             if (glib.Source.remove(v) == 0) {
@@ -726,6 +767,11 @@ pub const SplitTree = extern struct {
     ) callconv(.c) void {
         _ = parameter_;
 
+        const priv = self.private();
+        if (priv.expanded_surface.get()) |_| {
+            self.collapseExpanded();
+        }
+
         const old_tree = self.getTree() orelse return;
         var new_tree = old_tree.equalize(Application.default().allocator()) catch |err| {
             log.warn("unable to equalize tree: {}", .{err});
@@ -740,6 +786,11 @@ pub const SplitTree = extern struct {
         _: ?*glib.Variant,
         self: *Self,
     ) callconv(.c) void {
+        const priv = self.private();
+        if (priv.expanded_surface.get()) |_| {
+            self.collapseExpanded();
+        }
+
         const tree = self.getTree() orelse return;
         if (tree.zoomed != null) {
             tree.zoomed = null;
@@ -752,11 +803,173 @@ pub const SplitTree = extern struct {
         self.as(gobject.Object).notifyByPspec(properties.tree.impl.param_spec);
     }
 
+    pub fn actionExpand(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const priv = self.private();
+        if (priv.expanded_surface.get()) |_| {
+            self.collapseExpanded();
+            return;
+        }
+
+        const active = self.getActiveSurface() orelse return;
+        self.expandSurface(active);
+    }
+
+    pub fn expandSurface(self: *Self, surface: *Surface) void {
+        const priv = self.private();
+
+        // If something is already expanded, collapse it first
+        if (priv.expanded_surface.get()) |old| {
+            defer old.unref();
+            if (old == surface) {
+                self.collapseExpanded();
+                return;
+            }
+            self.collapseExpanded();
+        }
+
+        // If tree is zoomed, unzoom it
+        if (priv.tree) |tree| {
+            if (tree.zoomed != null) {
+                tree.zoomed = null;
+                self.as(gobject.Object).notifyByPspec(properties.tree.impl.param_spec);
+                self.as(gobject.Object).notifyByPspec(properties.@"is-zoomed".impl.param_spec);
+            }
+        }
+
+        const window = ext.getAncestor(
+            SurfaceScrolledWindow,
+            surface.as(gtk.Widget),
+        ) orelse return;
+
+        priv.expanded_surface.set(surface);
+
+        detachWidget(window.as(gtk.Widget));
+        priv.expand_bin.setChild(window.as(gtk.Widget));
+
+        // Compute 85% margins
+        const w = self.as(gtk.Widget).getWidth();
+        const h = self.as(gtk.Widget).getHeight();
+        priv.margin_x = if (w > 0) @max(24, @divTrunc(w * 7, 100)) else 40;
+        priv.margin_y = if (h > 0) @max(20, @divTrunc(h * 7, 100)) else 30;
+        const container = priv.expand_container.as(gtk.Widget);
+        container.setMarginStart(priv.margin_x);
+        container.setMarginEnd(priv.margin_x);
+        container.setMarginTop(priv.margin_y);
+        container.setMarginBottom(priv.margin_y);
+
+        priv.expand_backdrop.as(gtk.Widget).setVisible(1);
+
+        self.rebuild();
+
+        surface.grabFocus();
+        surface.setExpanded(true);
+
+        self.as(gobject.Object).notifyByPspec(properties.@"is-expanded".impl.param_spec);
+    }
+
+    pub fn collapseExpanded(self: *Self) void {
+        const priv = self.private();
+        const surface = priv.expanded_surface.get() orelse return;
+        defer surface.unref();
+
+        priv.expanded_surface.set(null);
+
+        if (ext.getAncestor(
+            SurfaceScrolledWindow,
+            surface.as(gtk.Widget),
+        )) |window| {
+            detachWidget(window.as(gtk.Widget));
+        }
+        priv.expand_bin.setChild(null);
+
+        priv.expand_backdrop.as(gtk.Widget).setVisible(0);
+
+        self.rebuild();
+
+        surface.grabFocus();
+        surface.setExpanded(false);
+
+        self.as(gobject.Object).notifyByPspec(properties.@"is-expanded".impl.param_spec);
+    }
+
+    fn backdropPressed(
+        _: *gtk.GestureClick,
+        _: c_int,
+        x: f64,
+        y: f64,
+        self: *Self,
+    ) callconv(.c) void {
+        const priv = self.private();
+        if (priv.expanded_surface.get()) |surface| {
+            defer surface.unref();
+            const backdrop_widget = priv.expand_backdrop.as(gtk.Widget);
+            const w = @as(f64, @floatFromInt(backdrop_widget.getWidth()));
+            const h = @as(f64, @floatFromInt(backdrop_widget.getHeight()));
+            const mx = @as(f64, @floatFromInt(priv.margin_x));
+            const my = @as(f64, @floatFromInt(priv.margin_y));
+
+            // If click was inside container bounds, do not dismiss
+            if (x >= mx and x <= (w - mx) and y >= my and y <= (h - my)) {
+                return;
+            }
+
+            self.collapseExpanded();
+        }
+    }
+
+    fn createPlaceholder(self: *Self, surface: *Surface) *gtk.Widget {
+        _ = self;
+        const button = gtk.Button.new();
+        const widget = button.as(gtk.Widget);
+        widget.addCssClass("flat");
+        widget.addCssClass("split-expand-placeholder");
+        widget.setHexpand(1);
+        widget.setVexpand(1);
+        widget.setFocusable(0);
+        widget.setFocusOnClick(0);
+        button.as(gtk.Actionable).setActionName("split-tree.expand");
+        button.as(gtk.Widget).setTooltipText("Click to restore split");
+
+        const center_box = gtk.Box.new(.vertical, 6);
+        const center_widget = center_box.as(gtk.Widget);
+        center_widget.setHalign(.center);
+        center_widget.setValign(.center);
+        center_widget.setHexpand(1);
+        center_widget.setVexpand(1);
+        center_widget.addCssClass("placeholder-content");
+
+        const icon = gtk.Image.newFromIconName("view-fullscreen-symbolic");
+        icon.setPixelSize(36);
+        center_box.append(icon.as(gtk.Widget));
+
+        var title_buf: [128]u8 = undefined;
+        const title = surface.getTitle() orelse "Terminal";
+        const label_text = std.fmt.bufPrintZ(&title_buf, "{s} (Expanded)", .{title}) catch "Expanded";
+        const label = gtk.Label.new(label_text);
+        center_box.append(label.as(gtk.Widget));
+
+        const hint = gtk.Label.new("Click to restore");
+        hint.as(gtk.Widget).addCssClass("dim");
+        center_box.append(hint.as(gtk.Widget));
+
+        button.setChild(center_widget);
+        return widget;
+    }
+
     pub fn actionCloseSplit(
         _: *gio.SimpleAction,
         _: ?*glib.Variant,
         self: *Self,
     ) callconv(.c) void {
+        const priv = self.private();
+        if (priv.expanded_surface.get()) |_| {
+            self.collapseExpanded();
+        }
+
         const surface = self.getActiveSurface() orelse return;
         surface.close();
     }
@@ -767,8 +980,16 @@ pub const SplitTree = extern struct {
     ) callconv(.c) void {
         const core = surface.core() orelse return;
 
-        // Reset our pending close state
+        // If the closing surface is expanded, collapse it first
         const priv = self.private();
+        if (priv.expanded_surface.get()) |exp| {
+            defer exp.unref();
+            if (exp == surface) {
+                self.collapseExpanded();
+            }
+        }
+
+        // Reset our pending close state
         priv.pending_close = null;
 
         // Find the surface in the tree to verify this is valid and
@@ -955,6 +1176,17 @@ pub const SplitTree = extern struct {
         return 0;
     }
 
+    fn rebuild(self: *Self) void {
+        const priv = self.private();
+        if (priv.rebuild_source) |v| {
+            if (glib.Source.remove(v) == 0) {
+                log.warn("unable to remove rebuild source", .{});
+            }
+            priv.rebuild_source = null;
+        }
+        _ = onRebuild(self);
+    }
+
     fn onRestoreFocus(ud: ?*anyopaque) callconv(.c) c_int {
         const self: *Self = @ptrCast(@alignCast(ud orelse return 0));
 
@@ -1017,6 +1249,13 @@ pub const SplitTree = extern struct {
     ) BuildTreeResult {
         return switch (tree.nodes[current.idx()]) {
             .leaf => |v| leaf: {
+                if (self.private().expanded_surface.get()) |expanded| {
+                    defer expanded.unref();
+                    if (v == expanded) {
+                        break :leaf .initNew(self.createPlaceholder(v));
+                    }
+                }
+
                 const window = ext.getAncestor(
                     SurfaceScrolledWindow,
                     v.as(gtk.Widget),
@@ -1121,15 +1360,21 @@ pub const SplitTree = extern struct {
                 properties.@"active-surface".impl,
                 properties.@"has-surfaces".impl,
                 properties.@"is-zoomed".impl,
+                properties.@"is-expanded".impl,
                 properties.tree.impl,
                 properties.@"is-split".impl,
             });
 
             // Bindings
+            class.bindTemplateChildPrivate("expand_overlay", .{});
             class.bindTemplateChildPrivate("tree_bin", .{});
+            class.bindTemplateChildPrivate("expand_backdrop", .{});
+            class.bindTemplateChildPrivate("expand_container", .{});
+            class.bindTemplateChildPrivate("expand_bin", .{});
 
             // Template Callbacks
             class.bindTemplateCallback("notify_tree", &propTree);
+            class.bindTemplateCallback("backdrop_pressed", &backdropPressed);
 
             // Signals
             signals.changed.impl.register(.{});
@@ -1187,6 +1432,10 @@ const SplitTreeSplit = extern struct {
         /// manually moving the split divider. See the "onIdle" function.
         max_changed: bool = false,
         pos_changed: bool = false,
+
+        /// True when we are programmatically setting the position, so that
+        /// notify::position is ignored and not treated as a user drag.
+        setting_position: bool = false,
 
         // Template bindings
         paned: *gtk.Paned,
@@ -1313,6 +1562,8 @@ const SplitTreeSplit = extern struct {
                     const max_f64: f64 = @floatFromInt(max);
                     break :desired_pos @intFromFloat(@round(max_f64 * desired_ratio));
                 };
+                priv.setting_position = true;
+                defer priv.setting_position = false;
                 paned.setPosition(desired_pos);
             },
             .widget_to_tree => {
@@ -1439,6 +1690,7 @@ const SplitTreeSplit = extern struct {
         self: *Self,
     ) callconv(.c) void {
         const priv = self.private();
+        if (priv.setting_position) return;
         priv.pos_changed = true;
         if (priv.idle == null) priv.idle = glib.idleAdd(
             onIdle,

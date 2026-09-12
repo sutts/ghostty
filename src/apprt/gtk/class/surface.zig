@@ -255,6 +255,19 @@ pub const Surface = extern struct {
             );
         };
 
+        pub const hostname = struct {
+            pub const name = "hostname";
+            const impl = gobject.ext.defineProperty(
+                name,
+                Self,
+                ?[:0]const u8,
+                .{
+                    .default = null,
+                    .accessor = C.privateStringFieldAccessor("hostname"),
+                },
+            );
+        };
+
         pub const pwd = struct {
             pub const name = "pwd";
             const impl = gobject.ext.defineProperty(
@@ -602,6 +615,7 @@ pub const Surface = extern struct {
         /// start in this pwd. If it is set after, it has no impact on the
         /// core surface.
         pwd: ?[:0]const u8 = null,
+        hostname: ?[:0]const u8 = null,
 
         /// The title of this surface, if any has been set.
         title: ?[:0]const u8 = null,
@@ -1905,6 +1919,7 @@ pub const Surface = extern struct {
         };
 
         priv.action_group = ext.actions.addAsGroup(Self, self, "surface", &actions);
+        self.updateHostname();
     }
 
     fn dispose(self: *Self) callconv(.c) void {
@@ -2013,6 +2028,10 @@ pub const Surface = extern struct {
         if (priv.pwd) |v| {
             glib.free(@ptrCast(@constCast(v)));
             priv.pwd = null;
+        }
+        if (priv.hostname) |v| {
+            glib.free(@ptrCast(@constCast(v)));
+            priv.hostname = null;
         }
         if (priv.title) |v| {
             glib.free(@ptrCast(@constCast(v)));
@@ -2130,6 +2149,7 @@ pub const Surface = extern struct {
         priv.title = null;
         if (title) |v| priv.title = glib.ext.dupeZ(u8, v);
         self.as(gobject.Object).notifyByPspec(properties.title.impl.param_spec);
+        self.updateHostname();
     }
 
     /// Overridden title. This will be generally be shown over the title
@@ -2154,6 +2174,126 @@ pub const Surface = extern struct {
         priv.pwd = null;
         if (pwd) |v| priv.pwd = glib.ext.dupeZ(u8, v);
         self.as(gobject.Object).notifyByPspec(properties.pwd.impl.param_spec);
+        self.updateHostname();
+    }
+
+    /// Returns the hostname property without a copy.
+    pub fn getHostname(self: *Self) ?[:0]const u8 {
+        return self.private().hostname;
+    }
+
+    /// Set the hostname for this surface, copies the value.
+    pub fn setHostname(self: *Self, hostname: ?[:0]const u8) void {
+        const priv = self.private();
+        if (priv.hostname) |v| {
+            if (hostname) |new_val| {
+                if (std.mem.eql(u8, v, new_val)) return;
+            }
+            glib.free(@ptrCast(@constCast(v)));
+        } else if (hostname == null) {
+            return;
+        }
+        priv.hostname = null;
+        if (hostname) |v| priv.hostname = glib.ext.dupeZ(u8, v);
+        self.as(gobject.Object).notifyByPspec(properties.hostname.impl.param_spec);
+    }
+
+    pub fn updateHostname(self: *Self) void {
+        const priv = self.private();
+        var buf: [256]u8 = undefined;
+
+        // 1. Check foreground process for SSH
+        if (priv.core_surface) |core_surf| {
+            if (core_surf.getProcessInfo(.foreground_pid)) |fg_pid| {
+                if (detectSshHost(&buf, fg_pid)) |host| {
+                    self.setHostname(host);
+                    return;
+                }
+            }
+        }
+
+        // 2. Check title for user@host
+        if (priv.title) |t| {
+            if (detectHostFromTitle(&buf, t)) |host| {
+                self.setHostname(host);
+                return;
+            }
+        }
+
+        // 3. Fallback to local host
+        const local = glib.getHostName();
+        self.setHostname(std.mem.span(local));
+    }
+
+    fn detectSshHost(buf: []u8, pid: u64) ?[:0]const u8 {
+        if (pid == 0) return null;
+        var path_buf: [64]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/cmdline", .{pid}) catch return null;
+        const file = std.Io.Dir.openFileAbsolute(global.io(), path, .{}) catch return null;
+        defer file.close(global.io());
+
+        var read_buf: [64]u8 = undefined;
+        var file_reader = file.reader(global.io(), &read_buf);
+        const reader = &file_reader.interface;
+        var cmd_buf: [2048]u8 = undefined;
+        const len = reader.readSliceShort(&cmd_buf) catch return null;
+        if (len == 0) return null;
+        const data = cmd_buf[0..len];
+
+        var it = std.mem.splitScalar(u8, data, 0);
+        const argv0 = it.next() orelse return null;
+        const prog = std.fs.path.basename(argv0);
+        if (!std.mem.eql(u8, prog, "ssh")) return null;
+
+        const opts_with_arg = "BbCcDEeFIiJLlmOoPpQRRSWw";
+
+        while (it.next()) |arg| {
+            if (arg.len == 0) continue;
+            if (std.mem.eql(u8, arg, "--")) {
+                const next = it.next() orelse return null;
+                if (next.len > 0) return extractHostOnly(buf, next);
+                return null;
+            }
+            if (arg[0] == '-' and arg.len > 1) {
+                const opt = arg[1];
+                if (std.mem.indexOfScalar(u8, opts_with_arg, opt) != null) {
+                    if (arg.len == 2) {
+                        _ = it.next();
+                    }
+                    continue;
+                } else {
+                    continue;
+                }
+            }
+            return extractHostOnly(buf, arg);
+        }
+        return null;
+    }
+
+    fn extractHostOnly(buf: []u8, dest: []const u8) ?[:0]const u8 {
+        const target = if (std.mem.indexOfScalar(u8, dest, '@')) |idx|
+            dest[idx + 1 ..]
+        else
+            dest;
+        if (target.len == 0) return null;
+        return std.fmt.bufPrintZ(buf, "{s}", .{target}) catch null;
+    }
+
+    fn detectHostFromTitle(buf: []u8, title: []const u8) ?[:0]const u8 {
+        const at_idx = std.mem.indexOfScalar(u8, title, '@') orelse return null;
+        const after_at = title[at_idx + 1 ..];
+        if (after_at.len == 0) return null;
+
+        var end_idx: usize = after_at.len;
+        for (after_at, 0..) |c, i| {
+            if (c == ':' or c == ' ' or c == '\t' or c == '/') {
+                end_idx = i;
+                break;
+            }
+        }
+        const host = after_at[0..end_idx];
+        if (host.len == 0) return null;
+        return std.fmt.bufPrintZ(buf, "{s}", .{host}) catch null;
     }
 
     /// Returns the focus state of this surface.
@@ -2744,6 +2884,10 @@ pub const Surface = extern struct {
         }
     }
 
+    pub fn setExpanded(self: *Self, expanded: bool) void {
+        self.private().split_header.setExpanded(expanded);
+    }
+
     pub fn actionNotifyOnNextCommandFinish(
         action: *gio.SimpleAction,
         _: ?*glib.Variant,
@@ -2924,6 +3068,7 @@ pub const Surface = extern struct {
 
         // Bell stops ringing as soon as we gain focus
         if (focused) self.setBellRinging(false);
+        if (focused) self.updateHostname();
     }
 
     /// The focus callback must be triggered on an idle loop source because
@@ -4058,6 +4203,7 @@ pub const Surface = extern struct {
                 properties.@"mouse-shape".impl,
                 properties.@"mouse-hidden".impl,
                 properties.@"mouse-hover-url".impl,
+                properties.hostname.impl,
                 properties.pwd.impl,
                 properties.title.impl,
                 properties.@"title-override".impl,

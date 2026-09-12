@@ -4417,6 +4417,7 @@ pub fn loadRecursiveFiles(self: *Config, alloc_gpa: Allocator) !void {
     // We must use a while below and not a for(items) because we
     // may add items to the list while iterating for recursive
     // config-file entries.
+    const initial_len = self.@"config-file".value.items.len;
     var i: usize = 0;
     while (i < self.@"config-file".value.items.len) : (i += 1) {
         const path, const optional = switch (self.@"config-file".value.items[i]) {
@@ -4433,6 +4434,11 @@ pub fn loadRecursiveFiles(self: *Config, alloc_gpa: Allocator) !void {
 
         // We must only load a unique file once
         if (try loaded.fetchPut(path, {}) != null) {
+            // If this entry was part of the initial list (e.g. specified both in
+            // the main config and via a CLI argument), it's a duplicate include,
+            // not a recursive cycle.
+            if (i < initial_len) continue;
+
             const diag: cli.Diagnostic = .{
                 .message = try std.fmt.allocPrintSentinel(
                     arena_alloc,

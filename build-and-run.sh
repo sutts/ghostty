@@ -53,12 +53,25 @@ fi
 version="1.3.2-sutts"
 build_args=(-Doptimize="$optimize" -Dversion-string="$version" -Dlib-version-string="$version")
 
+# Ghostty 1.3 reads config.ghostty, falling back to the older plain "config".
+main_config="$config_dir/config.ghostty"
+if [[ ! -f "$main_config" && -f "$config_dir/config" ]]; then
+    main_config="$config_dir/config"
+fi
+include="config-file = ?$config"
+
 if ! $install; then
     zig build "${build_args[@]}"
 
     # Run as a separate instance so the window isn't handed to an
     # already-running official Ghostty, which has no split header support.
-    exec ./zig-out/bin/ghostty --gtk-single-instance=false --config-file="$config" "$@"
+    # If the main config already includes split-header.conf, don't pass it again
+    # via --config-file to avoid duplicate include warnings.
+    extra_args=()
+    if ! grep -qxF "$include" "$main_config" 2>/dev/null; then
+        extra_args=(--config-file="$config")
+    fi
+    exec ./zig-out/bin/ghostty --gtk-single-instance=false "${extra_args[@]}" "$@"
 fi
 
 # The prefix is baked into the desktop file, D-Bus service and systemd unit,
@@ -67,12 +80,24 @@ prefix="${PREFIX:-$HOME/.local}"
 zig build -p "$prefix" "${build_args[@]}"
 echo "installed to $prefix"
 
-# Ghostty 1.3 reads config.ghostty, falling back to the older plain "config".
-main_config="$config_dir/config.ghostty"
-if [[ ! -f "$main_config" && -f "$config_dir/config" ]]; then
-    main_config="$config_dir/config"
+if [[ -f "$config_dir/app-icon.png" ]]; then
+    python3 -c "
+import os, sys
+from PIL import Image
+src = '$config_dir/app-icon.png'
+prefix = '$prefix'
+base = os.path.join(prefix, 'share', 'icons', 'hicolor')
+if os.path.isfile(src):
+    img = Image.open(src).convert('RGBA')
+    for s in [16, 32, 48, 64, 128, 256, 512]:
+        d = os.path.join(base, f'{s}x{s}', 'apps')
+        os.makedirs(d, exist_ok=True)
+        img.resize((s, s), Image.Resampling.LANCZOS).save(os.path.join(d, 'com.mitchellh.ghostty.png'), 'PNG')
+" 2>/dev/null || true
+    gtk-update-icon-cache -f -t "$prefix/share/icons/hicolor" 2>/dev/null || true
+    echo "preserved custom app icon"
 fi
-include="config-file = ?$config"
+
 if ! grep -qxF "$include" "$main_config" 2>/dev/null; then
     mkdir -p "$(dirname "$main_config")"
     printf '\n# Split header settings (Sutts build only; remove if switching back\n# to an official Ghostty, which rejects them).\n%s\n' "$include" >>"$main_config"

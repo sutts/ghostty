@@ -811,10 +811,7 @@ pub const Window = extern struct {
     /// Queue a simple text-based toast. All text-based toasts share the
     /// same timeout for consistency.
     ///
-    // This is not `pub` because we should be using signals emitted by
-    // other widgets to trigger our toasts. Other objects should not
-    // trigger toasts directly.
-    fn addToast(self: *Self, title: [*:0]const u8) void {
+    pub fn addToast(self: *Self, title: [*:0]const u8) void {
         const toast = adw.Toast.new(title);
         toast.setTimeout(3);
         self.private().toast_overlay.addToast(toast);

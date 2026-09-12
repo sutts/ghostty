@@ -26,6 +26,7 @@ Overlay terminal_page {
     // during init without a notify, so a binding on it would never update.
     $GhosttySplitHeader split_header {
       visible: false;
+      hostname: bind template.hostname;
       pwd: bind template.pwd;
       title: bind template.title;
       title-override: bind template.title-override;

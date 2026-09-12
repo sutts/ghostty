@@ -66,19 +66,65 @@ template $GhosttySplitHeader: Adw.Bin {
           hexpand: true;
           spacing: 3;
 
-          Label title_label {
+          Button title_button {
             styles [
-              "title-label",
+              "flat",
+              "title-button",
             ]
 
-            xalign: 0.0;
-            ellipsize: end;
-            single-line-mode: true;
+            halign: start;
+            focusable: false;
+            focus-on-click: false;
+            clicked => $title_clicked();
+            tooltip-text: _("Click to rename");
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+
+            child: Label title_label {
+              styles [
+                "title-label",
+              ]
+
+              xalign: 0.0;
+              ellipsize: end;
+              single-line-mode: true;
+            };
           }
 
           Box info_row {
             orientation: horizontal;
             spacing: 14;
+
+            Box host_box {
+              styles [
+                "info-pill",
+                "host-box",
+              ]
+
+              spacing: 5;
+
+              Image host_icon {
+                styles [
+                  "dim",
+                ]
+
+                icon-name: "computer-symbolic";
+                pixel-size: 12;
+              }
+
+              Label host_label {
+                styles [
+                  "dim",
+                  "mono",
+                ]
+
+                xalign: 0.0;
+                ellipsize: end;
+                single-line-mode: true;
+              }
+            }
 
             Box pwd_box {
               styles [
@@ -186,7 +232,23 @@ template $GhosttySplitHeader: Adw.Bin {
             "linked",
           ]
 
-          valign: start;
+          valign: center;
+
+          Button expand_button {
+            styles [
+              "flat",
+            ]
+
+            icon-name: "view-fullscreen-symbolic";
+            tooltip-text: _("Expand Block (Overlay)");
+            focusable: false;
+            focus-on-click: false;
+            clicked => $expand_clicked();
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+          }
 
           Button theme_button {
             styles [

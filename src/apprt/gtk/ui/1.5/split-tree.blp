@@ -5,10 +5,45 @@ template $GhosttySplitTree: Box {
   notify::tree => $notify_tree();
   orientation: vertical;
 
-  Adw.Bin tree_bin {
-    visible: bind template.has-surfaces;
+  Overlay expand_overlay {
     hexpand: true;
     vexpand: true;
+
+    child: Adw.Bin tree_bin {
+      visible: bind template.has-surfaces;
+      hexpand: true;
+      vexpand: true;
+    };
+
+    [overlay]
+    Box expand_backdrop {
+      visible: false;
+      styles [
+        "split-expand-backdrop",
+      ]
+      hexpand: true;
+      vexpand: true;
+
+      GestureClick {
+        pressed => $backdrop_pressed();
+      }
+
+      Box expand_container {
+        styles [
+          "split-expand-container",
+        ]
+        overflow: hidden;
+        halign: fill;
+        valign: fill;
+        hexpand: true;
+        vexpand: true;
+
+        Adw.Bin expand_bin {
+          hexpand: true;
+          vexpand: true;
+        }
+      }
+    }
   }
 
   // This could be a lot more visually pleasing but in practice this doesn't

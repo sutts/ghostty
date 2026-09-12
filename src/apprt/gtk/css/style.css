@@ -213,7 +213,11 @@ label.resize-overlay {
 }
 
 .split-header.style-banner .split-header-top {
-  padding: 0 8px 0 0;
+  padding: 0 12px 0 0;
+}
+
+.split-header.style-banner .header-controls {
+  margin-right: 2px;
 }
 
 .split-header.style-banner .avatar-button {
@@ -244,9 +248,22 @@ label.resize-overlay {
   border-radius: 12px;
 }
 
+.split-header .title-button {
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.split-header .title-button:hover .title-label {
+  opacity: 0.85;
+}
+
 .split-header .title-label {
   font-weight: bold;
-  font-size: 1.05em;
+  font-size: 1.18em;
 }
 
 .split-header .dim {
@@ -264,6 +281,21 @@ label.resize-overlay {
 
 .split-header .diff-del {
   color: #f87171;
+}
+
+.split-header .host-box.host-remote {
+  color: #38bdf8;
+}
+
+.split-header .host-box.host-remote image {
+  color: #38bdf8;
+  opacity: 1;
+}
+
+.split-header .host-box.host-remote label {
+  color: #38bdf8;
+  opacity: 1;
+  font-weight: 600;
 }
 
 .split-header-picker .avatar-choice {
@@ -372,3 +404,34 @@ label.resize-overlay {
   margin: 0;
   padding: 0;
 }
+
+/*
+ * Split expand (Wave Terminal style overlay)
+ */
+.split-expand-backdrop {
+  background-color: rgba(0, 0, 0, 0.68);
+  transition: opacity 200ms ease;
+}
+
+.split-expand-container {
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.14);
+  background-color: var(--window-bg-color, #1e1e1e);
+}
+
+.split-expand-placeholder {
+  background-color: rgba(0, 0, 0, 0.22);
+  border: 2px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  margin: 4px;
+}
+
+.split-expand-placeholder:hover {
+  background-color: rgba(0, 0, 0, 0.32);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.split-expand-placeholder .placeholder-content {
+  opacity: 0.55;
+}
+

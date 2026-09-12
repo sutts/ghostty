@@ -11,7 +11,10 @@ const global = @import("../../../global.zig");
 const themepkg = @import("../../../config/theme.zig");
 const gresource = @import("../build/gresource.zig");
 const Common = @import("../class.zig").Common;
+const gtk_ext = @import("../ext.zig");
 const Application = @import("application.zig").Application;
+const Window = @import("window.zig").Window;
+const Surface = @import("surface.zig").Surface;
 
 const Style = configpkg.Config.SplitHeaderStyle;
 
@@ -32,6 +35,117 @@ const git_script =
     \\git diff --numstat --no-renames HEAD 2>/dev/null
     \\printf '\036\n'
     \\git ls-files --others --exclude-standard 2>/dev/null | wc -l
+;
+
+/// Script to update the desktop and taskbar application icon.
+const set_app_icon_script =
+    \\set -e
+    \\SRC="$1"
+    \\CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
+    \\ICON_BASE="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+    \\mkdir -p "$CONFIG_DIR"
+    \\
+    \\if [ -z "$SRC" ] || [ "$SRC" = "--default" ] || [ "$SRC" = "none" ]; then
+    \\    rm -f "$CONFIG_DIR/app-icon.png"
+    \\    if [ -f "$CONFIG_DIR/icon-backup/com.mitchellh.ghostty.png" ]; then
+    \\        for s in 16 32 48 64 128 256 512; do
+    \\            cp -f "$CONFIG_DIR/icon-backup/com.mitchellh.ghostty.png" "$ICON_BASE/${s}x${s}/apps/com.mitchellh.ghostty.png" 2>/dev/null || true
+    \\        done
+    \\    elif [ -d "/usr/share/icons/hicolor" ]; then
+    \\        for s in 16 32 48 64 128 256 512 1024; do
+    \\            if [ -f "/usr/share/icons/hicolor/${s}x${s}/apps/com.mitchellh.ghostty.png" ]; then
+    \\                mkdir -p "$ICON_BASE/${s}x${s}/apps"
+    \\                cp -f "/usr/share/icons/hicolor/${s}x${s}/apps/com.mitchellh.ghostty.png" "$ICON_BASE/${s}x${s}/apps/com.mitchellh.ghostty.png" 2>/dev/null || true
+    \\            fi
+    \\        done
+    \\    fi
+    \\else
+    \\    if [ ! -f "$SRC" ]; then exit 1; fi
+    \\    cp -f "$SRC" "$CONFIG_DIR/app-icon.png"
+    \\fi
+    \\
+    \\python3 - "$SRC" "$CONFIG_DIR" "$ICON_BASE" << 'PYEOF' 2>/dev/null || true
+    \\import sys, os, subprocess
+    \\from PIL import Image
+    \\
+    \\src = sys.argv[1]
+    \\config_dir = sys.argv[2]
+    \\icon_base = sys.argv[3]
+    \\
+    \\is_default = not src or src in ('--default', 'none')
+    \\
+    \\if not is_default and os.path.isfile(src):
+    \\    base_img = Image.open(src).convert('RGBA')
+    \\    for s in [16, 32, 48, 64, 128, 256, 512]:
+    \\        d = os.path.join(icon_base, f"{s}x{s}", "apps")
+    \\        os.makedirs(d, exist_ok=True)
+    \\        base_img.resize((s, s), Image.Resampling.LANCZOS).save(os.path.join(d, "com.mitchellh.ghostty.png"), "PNG")
+    \\        d2 = os.path.join(icon_base, f"{s}x{s}@2", "apps")
+    \\        if os.path.isdir(d2):
+    \\            base_img.resize((s, s), Image.Resampling.LANCZOS).save(os.path.join(d2, "com.mitchellh.ghostty.png"), "PNG")
+    \\
+    \\    try:
+    \\        from Xlib import display, Xatom
+    \\        data = []
+    \\        for size in [16, 32, 48, 128]:
+    \\            resized = base_img.resize((size, size), Image.Resampling.LANCZOS)
+    \\            data.append(size)
+    \\            data.append(size)
+    \\            pixels = resized.load()
+    \\            for y in range(size):
+    \\                for x in range(size):
+    \\                    r, g, b, a = pixels[x, y]
+    \\                    data.append((a << 24) | (r << 16) | (g << 8) | b)
+    \\        d = display.Display()
+    \\        net_wm_icon = d.intern_atom('_NET_WM_ICON')
+    \\        out = subprocess.check_output(['wmctrl', '-lx']).decode()
+    \\        for line in out.splitlines():
+    \\            parts = line.split()
+    \\            if len(parts) >= 3 and 'ghostty' in parts[2].lower():
+    \\                try:
+    \\                    w = d.create_resource_object('window', int(parts[0], 16))
+    \\                    w.change_property(net_wm_icon, Xatom.CARDINAL, 32, data)
+    \\                except Exception:
+    \\                    pass
+    \\        d.flush()
+    \\    except Exception:
+    \\        pass
+    \\PYEOF
+    \\
+    \\if [ -n "$SRC" ] && [ "$SRC" != "--default" ] && [ "$SRC" != "none" ]; then
+    \\    for s in 16 32 48 64 128 256 512; do
+    \\        d="$ICON_BASE/${s}x${s}/apps"
+    \\        mkdir -p "$d"
+    \\        if command -v convert >/dev/null 2>&1; then
+    \\            convert "$SRC" -resize "${s}x${s}" "$d/com.mitchellh.ghostty.png" 2>/dev/null || true
+    \\        fi
+    \\    done
+    \\fi
+    \\
+    \\if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    \\    gtk-update-icon-cache -f -t "$ICON_BASE" 2>/dev/null || true
+    \\elif command -v gtk4-update-icon-cache >/dev/null 2>&1; then
+    \\    gtk4-update-icon-cache -f -t "$ICON_BASE" 2>/dev/null || true
+    \\fi
+    \\
+    \\gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.Cinnamon.ReloadTheme 2>/dev/null || true
+;
+
+/// Script to persist the default avatar in split-header.conf.
+const set_default_avatar_script =
+    \\set -e
+    \\SRC="$1"
+    \\CONF="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/split-header.conf"
+    \\if [ -z "$SRC" ] || [ "$SRC" = "none" ]; then
+    \\    sed -i '/^[[:space:]]*split-header-default-avatar/d' "$CONF" 2>/dev/null || true
+    \\    exit 0
+    \\fi
+    \\NAME="$(basename "$SRC")"
+    \\if grep -q "^[[:space:]]*split-header-default-avatar" "$CONF" 2>/dev/null; then
+    \\    sed -i "s|^[[:space:]]*split-header-default-avatar.*|split-header-default-avatar = $NAME|" "$CONF"
+    \\else
+    \\    echo "split-header-default-avatar = $NAME" >> "$CONF"
+    \\fi
 ;
 
 const avatar_extensions = [_][]const u8{ ".png", ".jpg", ".jpeg", ".webp" };
@@ -88,6 +202,19 @@ pub const SplitHeader = extern struct {
     });
 
     pub const properties = struct {
+        pub const hostname = struct {
+            pub const name = "hostname";
+            const impl = gobject.ext.defineProperty(
+                name,
+                Self,
+                ?[:0]const u8,
+                .{
+                    .default = null,
+                    .accessor = C.privateStringFieldAccessor("hostname"),
+                },
+            );
+        };
+
         pub const pwd = struct {
             pub const name = "pwd";
             const impl = gobject.ext.defineProperty(
@@ -129,6 +256,7 @@ pub const SplitHeader = extern struct {
     };
 
     const Private = struct {
+        hostname: ?[:0]const u8 = null,
         pwd: ?[:0]const u8 = null,
         title: ?[:0]const u8 = null,
         title_override: ?[:0]const u8 = null,
@@ -152,6 +280,7 @@ pub const SplitHeader = extern struct {
         default_avatar_idle: ?c_uint = null,
 
         // Template binds
+        expand_button: *gtk.Button,
         theme_button: *gtk.Button,
         style_button: *gtk.Button,
         smaller_button: *gtk.Button,
@@ -159,9 +288,14 @@ pub const SplitHeader = extern struct {
         avatar_button: *gtk.Button,
         avatar_image: *gtk.Image,
         avatar_fade: *gtk.Widget,
+        title_button: *gtk.Button,
         title_label: *gtk.Label,
+        is_expanded: bool = false,
         info_row: *gtk.Box,
         rail_row: *gtk.Box,
+        host_box: *gtk.Widget,
+        host_icon: *gtk.Image,
+        host_label: *gtk.Label,
         git_box: *gtk.Widget,
         pwd_box: *gtk.Widget,
         pwd_label: *gtk.Label,
@@ -176,6 +310,15 @@ pub const SplitHeader = extern struct {
         /// The avatar picker, rebuilt each time it opens so newly added
         /// images show up.
         picker: ?*gtk.Popover = null,
+
+        /// Currently selected avatar path for this split.
+        current_avatar_buf: [1024]u8 = undefined,
+        current_avatar_path: ?[:0]const u8 = null,
+
+        /// Secondary context popover for choosing app icon or default avatar.
+        context_popover: ?*gtk.Popover = null,
+        context_avatar_buf: [1024]u8 = undefined,
+        context_avatar: ?[:0]const u8 = null,
 
         /// Styles for the chosen avatar, scoped by `style_class` which is
         /// added to the enclosing surface.
@@ -204,6 +347,7 @@ pub const SplitHeader = extern struct {
         ) catch unreachable;
         next_style_id +%= 1;
 
+        _ = gobject.Object.signals.notify.connect(self, *Self, propHostname, self, .{ .detail = "hostname" });
         _ = gobject.Object.signals.notify.connect(self, *Self, propPwd, self, .{ .detail = "pwd" });
         _ = gobject.Object.signals.notify.connect(self, *Self, propTitle, self, .{ .detail = "title" });
         _ = gobject.Object.signals.notify.connect(self, *Self, propTitle, self, .{ .detail = "title-override" });
@@ -219,6 +363,11 @@ pub const SplitHeader = extern struct {
 
         self.updateTitle();
         self.updatePwd();
+        self.updateHost();
+    }
+
+    fn propHostname(_: *Self, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        self.updateHost();
     }
 
     fn propPwd(_: *Self, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
@@ -249,6 +398,29 @@ pub const SplitHeader = extern struct {
         priv.pwd_label.setLabel(shortenHome(&buf, pwd));
         priv.pwd_box.setVisible(1);
         self.refreshGit();
+    }
+
+    fn updateHost(self: *Self) void {
+        const priv = self.private();
+        const host: [:0]const u8 = if (priv.hostname) |h| h else std.mem.span(glib.getHostName());
+        const local_host = std.mem.span(glib.getHostName());
+
+        const is_remote = !std.mem.eql(u8, host, local_host);
+
+        if (is_remote) {
+            priv.host_icon.setFromIconName("network-server-symbolic");
+            priv.host_box.addCssClass("host-remote");
+            var tip_buf: [256]u8 = undefined;
+            const tip = std.fmt.bufPrintZ(&tip_buf, "Remote Host (SSH): {s}", .{host}) catch "Remote Host (SSH)";
+            priv.host_box.setTooltipText(tip);
+        } else {
+            priv.host_icon.setFromIconName("computer-symbolic");
+            priv.host_box.removeCssClass("host-remote");
+            priv.host_box.setTooltipText("Local Host");
+        }
+
+        priv.host_label.setLabel(host);
+        priv.host_box.setVisible(1);
     }
 
     fn shortenHome(buf: []u8, path: [:0]const u8) [:0]const u8 {
@@ -295,6 +467,7 @@ pub const SplitHeader = extern struct {
         const in_rail = style == .rail;
         const from = if (in_rail) priv.info_row else priv.rail_row;
         const to = if (in_rail) priv.rail_row else priv.info_row;
+        moveChild(from, to, priv.host_box);
         moveChild(from, to, priv.pwd_box);
         moveChild(from, to, priv.git_box);
         priv.rail_row.as(gtk.Widget).setVisible(@intFromBool(in_rail));
@@ -345,6 +518,29 @@ pub const SplitHeader = extern struct {
         self.applyStyle();
     }
 
+    pub fn setExpanded(self: *Self, expanded: bool) void {
+        const priv = self.private();
+        priv.is_expanded = expanded;
+        if (expanded) {
+            priv.expand_button.setIconName("view-restore-symbolic");
+            priv.expand_button.as(gtk.Widget).setTooltipText("Restore Split (Collapse)");
+        } else {
+            priv.expand_button.setIconName("view-fullscreen-symbolic");
+            priv.expand_button.as(gtk.Widget).setTooltipText("Expand Block (Overlay)");
+        }
+    }
+
+    fn titleClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        _ = self.as(gtk.Widget).activateAction("surface.prompt-title", null);
+    }
+
+    fn expandClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        if (self.findSurface()) |surface| {
+            _ = surface.grabFocus();
+        }
+        _ = self.as(gtk.Widget).activateAction("split-tree.expand", null);
+    }
+
     fn moveChild(from: *gtk.Box, to: *gtk.Box, child: *gtk.Widget) void {
         const parent = child.getParent() orelse return;
         if (parent != from.as(gtk.Widget)) return;
@@ -361,6 +557,10 @@ pub const SplitHeader = extern struct {
 
     fn onGitTimer(ud: ?*anyopaque) callconv(.c) c_int {
         const self: *Self = @ptrCast(@alignCast(ud orelse return 0));
+        if (gtk_ext.getAncestor(Surface, self.as(gtk.Widget))) |surface| {
+            surface.updateHostname();
+        }
+        self.updateHost();
         self.refreshGit();
         return 1;
     }
@@ -529,17 +729,226 @@ pub const SplitHeader = extern struct {
         button.setChild(child);
         const widget = button.as(gtk.Widget);
         widget.setName(name);
-        widget.setTooltipText(tooltip);
+
+        var tip_buf: [512]u8 = undefined;
+        const is_none = std.mem.eql(u8, name, no_avatar_name);
+        const full_tip = if (is_none)
+            std.fmt.bufPrintZ(&tip_buf, "{s}\nLeft-click: Remove split avatar\nRight-click: Options / Reset icon", .{tooltip}) catch tooltip
+        else
+            std.fmt.bufPrintZ(&tip_buf, "{s}\nLeft-click: Set split avatar\nRight-click: Set as app icon / Options", .{tooltip}) catch tooltip;
+        widget.setTooltipText(full_tip);
+
         widget.setFocusable(0);
         widget.setCursorFromName("pointer");
         widget.addCssClass("flat");
         widget.addCssClass("avatar-choice");
         _ = gtk.Button.signals.clicked.connect(button, *Self, choiceClicked, self, .{});
+
+        const gesture = gtk.GestureClick.new();
+        gesture.as(gtk.GestureSingle).setButton(3);
+        _ = gtk.GestureClick.signals.pressed.connect(gesture, *Self, choiceRightClicked, self, .{});
+        widget.addController(gesture.as(gtk.EventController));
+
         return widget;
+    }
+
+    fn choiceRightClicked(
+        gesture: *gtk.GestureClick,
+        _: c_int,
+        _: f64,
+        _: f64,
+        self: *Self,
+    ) callconv(.c) void {
+        const widget = gesture.as(gtk.EventController).getWidget() orelse return;
+        const name = std.mem.span(widget.getName());
+        self.showAvatarContextMenu(widget, name);
+    }
+
+    fn showAvatarContextMenu(self: *Self, widget: *gtk.Widget, path: []const u8) void {
+        const priv = self.private();
+        if (priv.context_popover) |old| {
+            old.as(gtk.Widget).unparent();
+            priv.context_popover = null;
+        }
+
+        const is_none = std.mem.eql(u8, path, no_avatar_name);
+        priv.context_avatar = if (is_none) null else (std.fmt.bufPrintZ(&priv.context_avatar_buf, "{s}", .{path}) catch null);
+
+        const popover = gtk.Popover.new();
+        popover.as(gtk.Widget).addCssClass("avatar-context-menu");
+        popover.as(gtk.Widget).setParent(widget);
+
+        const box = gtk.Box.new(.vertical, 4);
+        box.as(gtk.Widget).setMarginTop(6);
+        box.as(gtk.Widget).setMarginBottom(6);
+        box.as(gtk.Widget).setMarginStart(6);
+        box.as(gtk.Widget).setMarginEnd(6);
+
+        if (is_none) {
+            const clear_btn = gtk.Button.newWithLabel("Clear Split Avatar");
+            clear_btn.as(gtk.Widget).addCssClass("flat");
+            clear_btn.as(gtk.Widget).setHalign(.fill);
+            _ = gtk.Button.signals.clicked.connect(clear_btn, *Self, onContextClearSplit, self, .{});
+            box.append(clear_btn.as(gtk.Widget));
+
+            const reset_icon_btn = gtk.Button.newWithLabel("Reset Default App Icon");
+            reset_icon_btn.as(gtk.Widget).addCssClass("flat");
+            reset_icon_btn.as(gtk.Widget).setHalign(.fill);
+            _ = gtk.Button.signals.clicked.connect(reset_icon_btn, *Self, onContextResetAppIcon, self, .{});
+            box.append(reset_icon_btn.as(gtk.Widget));
+        } else {
+            // "Set as Desktop App Icon"
+            const app_icon_btn = gtk.Button.new();
+            app_icon_btn.as(gtk.Widget).addCssClass("flat");
+            app_icon_btn.as(gtk.Widget).setHalign(.fill);
+            const app_icon_box = gtk.Box.new(.horizontal, 8);
+            const app_icon_img = gtk.Image.newFromIconName("emblem-favorite-symbolic");
+            const app_icon_lbl = gtk.Label.new("Set as Desktop App Icon");
+            app_icon_box.append(app_icon_img.as(gtk.Widget));
+            app_icon_box.append(app_icon_lbl.as(gtk.Widget));
+            app_icon_btn.setChild(app_icon_box.as(gtk.Widget));
+            _ = gtk.Button.signals.clicked.connect(app_icon_btn, *Self, onContextSetAppIcon, self, .{});
+            box.append(app_icon_btn.as(gtk.Widget));
+
+            // "Set as Split Avatar"
+            const split_btn = gtk.Button.new();
+            split_btn.as(gtk.Widget).addCssClass("flat");
+            split_btn.as(gtk.Widget).setHalign(.fill);
+            const split_box = gtk.Box.new(.horizontal, 8);
+            const split_img = gtk.Image.newFromIconName("avatar-default-symbolic");
+            const split_lbl = gtk.Label.new("Set as Split Avatar");
+            split_box.append(split_img.as(gtk.Widget));
+            split_box.append(split_lbl.as(gtk.Widget));
+            split_btn.setChild(split_box.as(gtk.Widget));
+            _ = gtk.Button.signals.clicked.connect(split_btn, *Self, onContextSetSplitAvatar, self, .{});
+            box.append(split_btn.as(gtk.Widget));
+
+            // "Set as Default Split Avatar"
+            const default_btn = gtk.Button.new();
+            default_btn.as(gtk.Widget).addCssClass("flat");
+            default_btn.as(gtk.Widget).setHalign(.fill);
+            const def_box = gtk.Box.new(.horizontal, 8);
+            const def_img = gtk.Image.newFromIconName("preferences-desktop-appearance-symbolic");
+            const def_lbl = gtk.Label.new("Set as Default Split Avatar");
+            def_box.append(def_img.as(gtk.Widget));
+            def_box.append(def_lbl.as(gtk.Widget));
+            default_btn.setChild(def_box.as(gtk.Widget));
+            _ = gtk.Button.signals.clicked.connect(default_btn, *Self, onContextSetDefaultAvatar, self, .{});
+            box.append(default_btn.as(gtk.Widget));
+        }
+
+        popover.setChild(box.as(gtk.Widget));
+        priv.context_popover = popover;
+        popover.popup();
+    }
+
+    fn onContextClearSplit(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.context_popover) |p| p.popdown();
+        if (priv.picker) |p| p.popdown();
+        self.setAvatar(null);
+    }
+
+    fn onContextResetAppIcon(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.context_popover) |p| p.popdown();
+        if (priv.picker) |p| p.popdown();
+        self.setAsAppIcon(null);
+    }
+
+    fn onContextSetAppIcon(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.context_popover) |p| p.popdown();
+        if (priv.picker) |p| p.popdown();
+        self.setAsAppIcon(priv.context_avatar);
+    }
+
+    fn onContextSetSplitAvatar(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.context_popover) |p| p.popdown();
+        if (priv.picker) |p| p.popdown();
+        self.setAvatar(priv.context_avatar);
+    }
+
+    fn onContextSetDefaultAvatar(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.context_popover) |p| p.popdown();
+        if (priv.picker) |p| p.popdown();
+        const target = priv.context_avatar;
+        self.setAvatar(target);
+        self.saveDefaultAvatar(target);
+    }
+
+    fn onSetCurrentAsAppIcon(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (priv.picker) |p| p.popdown();
+        self.setAsAppIcon(priv.current_avatar_path);
+    }
+
+    fn saveDefaultAvatar(self: *Self, path_: ?[:0]const u8) void {
+        const launcher = gio.SubprocessLauncher.new(.{
+            .stdout_pipe = true,
+            .stderr_silence = true,
+        });
+        defer launcher.unref();
+
+        const path_arg: [:0]const u8 = if (path_) |p| p else "";
+        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", set_default_avatar_script, "sh", path_arg.ptr };
+        var err: ?*glib.Error = null;
+        const subprocess = launcher.spawnv(@ptrCast(&argv), &err) orelse {
+            if (err) |e| e.free();
+            log.warn("unable to run set-default-avatar helper", .{});
+            return;
+        };
+        defer subprocess.unref();
+
+        const root = self.as(gtk.Widget).getRoot();
+        if (root) |r| {
+            if (gobject.ext.cast(Window, r)) |w| {
+                w.addToast("Saved as default split avatar");
+            }
+        }
+    }
+
+    fn setAsAppIcon(self: *Self, path_: ?[:0]const u8) void {
+        const priv = self.private();
+        if (priv.context_popover) |p| p.popdown();
+        if (priv.picker) |p| p.popdown();
+
+        const launcher = gio.SubprocessLauncher.new(.{
+            .stdout_pipe = true,
+            .stderr_silence = true,
+        });
+        defer launcher.unref();
+
+        const path_arg: [:0]const u8 = if (path_) |p| p else "";
+        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", set_app_icon_script, "sh", path_arg.ptr };
+        var err: ?*glib.Error = null;
+        const subprocess = launcher.spawnv(@ptrCast(&argv), &err) orelse {
+            if (err) |e| e.free();
+            log.warn("unable to run set-app-icon helper", .{});
+            return;
+        };
+        defer subprocess.unref();
+
+        const root = self.as(gtk.Widget).getRoot();
+        if (root) |r| {
+            if (gobject.ext.cast(Window, r)) |w| {
+                if (path_ != null and !std.mem.eql(u8, path_.?, no_avatar_name)) {
+                    w.addToast("Desktop application icon updated");
+                } else {
+                    w.addToast("Desktop application icon reset to default");
+                }
+            }
+        }
     }
 
     fn showPicker(self: *Self) void {
         const priv = self.private();
+        if (priv.context_popover) |old| {
+            old.as(gtk.Widget).unparent();
+            priv.context_popover = null;
+        }
         if (priv.picker) |old| {
             old.as(gtk.Widget).unparent();
             priv.picker = null;
@@ -558,8 +967,8 @@ pub const SplitHeader = extern struct {
         const flow = gtk.FlowBox.new();
         flow.setSelectionMode(.none);
         flow.setHomogeneous(1);
-        flow.setMinChildrenPerLine(5);
-        flow.setMaxChildrenPerLine(5);
+        flow.setMinChildrenPerLine(8);
+        flow.setMaxChildrenPerLine(8);
 
         const none_icon = gtk.Image.newFromIconName("action-unavailable-symbolic");
         none_icon.setPixelSize(24);
@@ -585,19 +994,63 @@ pub const SplitHeader = extern struct {
         scroller.setPolicy(.never, .automatic);
         scroller.setPropagateNaturalWidth(1);
         scroller.setPropagateNaturalHeight(1);
-        scroller.setMaxContentHeight(360);
-        // Five 48px columns plus room for the overlay scrollbar, which
+        scroller.setMaxContentHeight(420);
+        // Eight 48px columns plus room for the overlay scrollbar, which
         // otherwise covers the last column.
-        scroller.setMinContentWidth(340);
+        scroller.setMinContentWidth(540);
         flow.as(gtk.Widget).setMarginEnd(12);
         scroller.setChild(flow.as(gtk.Widget));
+
+        const container = gtk.Box.new(.vertical, 8);
+        container.as(gtk.Widget).setMarginTop(8);
+        container.as(gtk.Widget).setMarginBottom(8);
+        container.as(gtk.Widget).setMarginStart(10);
+        container.as(gtk.Widget).setMarginEnd(10);
+
+        // Header
+        const header_row = gtk.Box.new(.horizontal, 8);
+        const title_box = gtk.Box.new(.vertical, 2);
+
+        const title_label = gtk.Label.new("Choose Avatar");
+        title_label.as(gtk.Widget).addCssClass("title-4");
+        title_label.as(gtk.Widget).setHalign(.start);
+
+        const subtitle_label = gtk.Label.new("Click to select · Right-click for options");
+        subtitle_label.as(gtk.Widget).addCssClass("dim-label");
+        subtitle_label.as(gtk.Widget).addCssClass("caption");
+        subtitle_label.as(gtk.Widget).setHalign(.start);
+
+        title_box.append(title_label.as(gtk.Widget));
+        title_box.append(subtitle_label.as(gtk.Widget));
+        header_row.append(title_box.as(gtk.Widget));
+
+        // Spacer
+        const spacer = gtk.Box.new(.horizontal, 0);
+        spacer.as(gtk.Widget).setHexpand(1);
+        header_row.append(spacer.as(gtk.Widget));
+
+        // Button: "Set as App Icon"
+        const current_app_icon_btn = gtk.Button.new();
+        current_app_icon_btn.as(gtk.Widget).addCssClass("flat");
+        current_app_icon_btn.as(gtk.Widget).setTooltipText("Set current split avatar as desktop / taskbar icon");
+        const btn_content = gtk.Box.new(.horizontal, 6);
+        const btn_icon = gtk.Image.newFromIconName("emblem-favorite-symbolic");
+        const btn_lbl = gtk.Label.new("Set as App Icon");
+        btn_content.append(btn_icon.as(gtk.Widget));
+        btn_content.append(btn_lbl.as(gtk.Widget));
+        current_app_icon_btn.setChild(btn_content.as(gtk.Widget));
+        _ = gtk.Button.signals.clicked.connect(current_app_icon_btn, *Self, onSetCurrentAsAppIcon, self, .{});
+        header_row.append(current_app_icon_btn.as(gtk.Widget));
+
+        container.append(header_row.as(gtk.Widget));
+        container.append(scroller.as(gtk.Widget));
 
         const popover = gtk.Popover.new();
         popover.as(gtk.Widget).addCssClass("split-header-picker");
         // The avatar sits at the split's left edge, so a centred popover would
         // spill out past it; align it to the avatar so it opens rightward.
         popover.as(gtk.Widget).setHalign(.start);
-        popover.setChild(scroller.as(gtk.Widget));
+        popover.setChild(container.as(gtk.Widget));
         popover.as(gtk.Widget).setParent(priv.avatar_button.as(gtk.Widget));
         priv.picker = popover;
         popover.popup();
@@ -630,6 +1083,11 @@ pub const SplitHeader = extern struct {
 
     fn setAvatar(self: *Self, path_: ?[:0]const u8) void {
         const priv = self.private();
+        if (path_) |p| {
+            priv.current_avatar_path = std.fmt.bufPrintZ(&priv.current_avatar_buf, "{s}", .{p}) catch null;
+        } else {
+            priv.current_avatar_path = null;
+        }
         const path = path_ orelse {
             priv.avatar_image.setFromIconName("avatar-default-symbolic");
             self.applyAccent(null);
@@ -957,6 +1415,10 @@ pub const SplitHeader = extern struct {
             c.unref();
             priv.git_cancellable = null;
         }
+        if (priv.context_popover) |p| {
+            p.as(gtk.Widget).unparent();
+            priv.context_popover = null;
+        }
         if (priv.picker) |p| {
             p.as(gtk.Widget).unparent();
             priv.picker = null;
@@ -988,7 +1450,7 @@ pub const SplitHeader = extern struct {
 
     fn finalize(self: *Self) callconv(.c) void {
         const priv = self.private();
-        inline for (.{ "pwd", "title", "title_override" }) |field| {
+        inline for (.{ "hostname", "pwd", "title", "title_override" }) |field| {
             if (@field(priv, field)) |v| {
                 glib.free(@ptrCast(@constCast(v)));
                 @field(priv, field) = null;
@@ -1023,6 +1485,7 @@ pub const SplitHeader = extern struct {
             );
 
             // Bindings
+            class.bindTemplateChildPrivate("expand_button", .{});
             class.bindTemplateChildPrivate("theme_button", .{});
             class.bindTemplateChildPrivate("style_button", .{});
             class.bindTemplateChildPrivate("smaller_button", .{});
@@ -1030,9 +1493,13 @@ pub const SplitHeader = extern struct {
             class.bindTemplateChildPrivate("avatar_button", .{});
             class.bindTemplateChildPrivate("avatar_image", .{});
             class.bindTemplateChildPrivate("avatar_fade", .{});
+            class.bindTemplateChildPrivate("title_button", .{});
             class.bindTemplateChildPrivate("title_label", .{});
             class.bindTemplateChildPrivate("info_row", .{});
             class.bindTemplateChildPrivate("rail_row", .{});
+            class.bindTemplateChildPrivate("host_box", .{});
+            class.bindTemplateChildPrivate("host_icon", .{});
+            class.bindTemplateChildPrivate("host_label", .{});
             class.bindTemplateChildPrivate("git_box", .{});
             class.bindTemplateChildPrivate("pwd_box", .{});
             class.bindTemplateChildPrivate("pwd_label", .{});
@@ -1050,9 +1517,12 @@ pub const SplitHeader = extern struct {
             class.bindTemplateCallback("cycle_style", &cycleStyleClicked);
             class.bindTemplateCallback("header_smaller", &headerSmallerClicked);
             class.bindTemplateCallback("header_larger", &headerLargerClicked);
+            class.bindTemplateCallback("title_clicked", &titleClicked);
+            class.bindTemplateCallback("expand_clicked", &expandClicked);
 
             // Properties
             gobject.ext.registerProperties(class, &.{
+                properties.hostname.impl,
                 properties.pwd.impl,
                 properties.title.impl,
                 properties.@"title-override".impl,
