@@ -2158,7 +2158,14 @@ pub const Surface = extern struct {
     /// title. For manually set titles see `setTitleOverride`.
     pub fn setTitle(self: *Self, title: ?[:0]const u8) void {
         const priv = self.private();
-        if (priv.title) |v| glib.free(@ptrCast(@constCast(v)));
+        if (priv.title) |v| {
+            if (title) |new_val| {
+                if (std.mem.eql(u8, v, new_val)) return;
+            }
+            glib.free(@ptrCast(@constCast(v)));
+        } else if (title == null) {
+            return;
+        }
         priv.title = null;
         if (title) |v| priv.title = glib.ext.dupeZ(u8, v);
         self.as(gobject.Object).notifyByPspec(properties.title.impl.param_spec);
@@ -2183,7 +2190,14 @@ pub const Surface = extern struct {
     /// Set the pwd for this surface, copies the value.
     pub fn setPwd(self: *Self, pwd: ?[:0]const u8) void {
         const priv = self.private();
-        if (priv.pwd) |v| glib.free(@ptrCast(@constCast(v)));
+        if (priv.pwd) |v| {
+            if (pwd) |new_val| {
+                if (std.mem.eql(u8, v, new_val)) return;
+            }
+            glib.free(@ptrCast(@constCast(v)));
+        } else if (pwd == null) {
+            return;
+        }
         priv.pwd = null;
         if (pwd) |v| priv.pwd = glib.ext.dupeZ(u8, v);
         self.as(gobject.Object).notifyByPspec(properties.pwd.impl.param_spec);
