@@ -2211,6 +2211,10 @@ pub const Application = extern struct {
         }
     };
 
+    pub fn openUrl(self: *Application, value: apprt.action.OpenUrl) void {
+        Action.openUrl(self, value);
+    }
+
     pub fn openUrlFallback(self: *Application, kind: apprt.action.OpenUrl.Kind, url: []const u8) void {
         _ = self;
         // Fallback to the minimal cross-platform way of opening a URL.

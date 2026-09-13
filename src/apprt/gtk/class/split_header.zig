@@ -6,6 +6,7 @@ const glib = @import("glib");
 const gobject = @import("gobject");
 const gtk = @import("gtk");
 
+const apprt = @import("../../../apprt.zig");
 const configpkg = @import("../../../config.zig");
 const global = @import("../../../global.zig");
 const themepkg = @import("../../../config/theme.zig");
@@ -35,6 +36,66 @@ const git_script =
     \\git diff --numstat --no-renames HEAD 2>/dev/null
     \\printf '\036\n'
     \\git ls-files --others --exclude-standard 2>/dev/null | wc -l
+;
+
+/// Prints a single URL: an open pull/merge request for the current branch
+/// if the `gh` (GitHub) or `glab` (GitLab) CLI is installed and finds one,
+/// otherwise the branch's tree view on whichever host the origin remote is
+/// detected to be (hostname containing "gitlab" is treated as GitLab,
+/// everything else as GitHub).
+const branch_link_script =
+    \\cd "$1" 2>/dev/null || exit 1
+    \\export GIT_OPTIONAL_LOCKS=0
+    \\branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 1
+    \\remote=$(git config --get remote.origin.url 2>/dev/null)
+    \\[ -z "$remote" ] && exit 1
+    \\
+    \\url="${remote%.git}"
+    \\case "$url" in
+    \\  git@*)
+    \\    rest="${url#git@}"
+    \\    host="${rest%%:*}"
+    \\    path="${rest#*:}"
+    \\    ;;
+    \\  ssh://*)
+    \\    rest="${url#ssh://}"
+    \\    rest="${rest#*@}"
+    \\    host="${rest%%/*}"
+    \\    path="${rest#*/}"
+    \\    ;;
+    \\  *://*)
+    \\    rest="${url#*://}"
+    \\    host="${rest%%/*}"
+    \\    path="${rest#*/}"
+    \\    ;;
+    \\  *)
+    \\    exit 1
+    \\    ;;
+    \\esac
+    \\
+    \\case "$host" in
+    \\  *gitlab*) provider=gitlab ;;
+    \\  *) provider=github ;;
+    \\esac
+    \\
+    \\if [ "$provider" = gitlab ]; then
+    \\  fallback="https://$host/$path/-/tree/$branch"
+    \\else
+    \\  fallback="https://$host/$path/tree/$branch"
+    \\fi
+    \\
+    \\pr_url=""
+    \\if [ "$provider" = github ] && command -v gh >/dev/null 2>&1; then
+    \\  pr_url=$(gh pr view --json url -q .url 2>/dev/null)
+    \\elif [ "$provider" = gitlab ] && command -v glab >/dev/null 2>&1; then
+    \\  pr_url=$(glab mr view --output json 2>/dev/null | sed -n 's/.*"web_url"[ \t]*:[ \t]*"\([^"]*\)".*/\1/p')
+    \\fi
+    \\
+    \\if [ -n "$pr_url" ]; then
+    \\  echo "$pr_url"
+    \\else
+    \\  echo "$fallback"
+    \\fi
 ;
 
 /// Script to update the desktop and taskbar application icon.
@@ -309,7 +370,7 @@ pub const SplitHeader = extern struct {
         pwd_box: *gtk.Widget,
         pwd_icon: *gtk.Image,
         pwd_label: *gtk.Label,
-        branch_box: *gtk.Widget,
+        branch_box: *gtk.Button,
         branch_label: *gtk.Label,
         stats_box: *gtk.Widget,
         files_label: *gtk.Label,
@@ -338,6 +399,7 @@ pub const SplitHeader = extern struct {
 
         git_timer: ?c_uint = null,
         git_cancellable: ?*gio.Cancellable = null,
+        branch_link_cancellable: ?*gio.Cancellable = null,
 
         /// Set once disposed so in-flight git callbacks don't touch
         /// template children that no longer exist.
@@ -742,14 +804,14 @@ pub const SplitHeader = extern struct {
     fn setGitStats(self: *Self, stats_: ?GitStats) void {
         const priv = self.private();
         const stats = stats_ orelse {
-            priv.branch_box.setVisible(0);
+            priv.branch_box.as(gtk.Widget).setVisible(0);
             priv.stats_box.setVisible(0);
             return;
         };
 
         var branch_buf: [256]u8 = undefined;
         priv.branch_label.setLabel(std.fmt.bufPrintZ(&branch_buf, "{s}", .{stats.branch}) catch "?");
-        priv.branch_box.setVisible(1);
+        priv.branch_box.as(gtk.Widget).setVisible(1);
         priv.stats_box.setVisible(1);
 
         if (stats.files == 0 and stats.untracked == 0) {
@@ -776,6 +838,64 @@ pub const SplitHeader = extern struct {
         const text = std.fmt.bufPrintZ(&text_buf, fmt, .{groupDigits(&digits_buf, n)}) catch return;
         label.setLabel(text);
         label.as(gtk.Widget).setVisible(1);
+    }
+
+    fn branchClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        self.openBranchLink();
+    }
+
+    fn openBranchLink(self: *Self) void {
+        const priv = self.private();
+        if (priv.branch_link_cancellable) |c| {
+            c.cancel();
+            c.unref();
+            priv.branch_link_cancellable = null;
+        }
+        const pwd = priv.pwd orelse return;
+
+        const launcher = gio.SubprocessLauncher.new(.{
+            .stdout_pipe = true,
+            .stderr_silence = true,
+        });
+        defer launcher.unref();
+
+        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", branch_link_script, "sh", pwd.ptr };
+        var err: ?*glib.Error = null;
+        const subprocess = launcher.spawnv(@ptrCast(&argv), &err) orelse {
+            if (err) |e| e.free();
+            log.warn("unable to start branch link helper", .{});
+            return;
+        };
+
+        const cancellable = gio.Cancellable.new();
+        priv.branch_link_cancellable = cancellable;
+        subprocess.communicateUtf8Async(null, cancellable, onBranchLinkDone, self.ref());
+    }
+
+    fn onBranchLinkDone(
+        source: ?*gobject.Object,
+        result: *gio.AsyncResult,
+        ud: ?*anyopaque,
+    ) callconv(.c) void {
+        const self: *Self = @ptrCast(@alignCast(ud orelse return));
+        defer self.unref();
+        const subprocess = gobject.ext.cast(gio.Subprocess, source orelse return) orelse return;
+        defer subprocess.unref();
+
+        var stdout: ?[*:0]u8 = null;
+        var err: ?*glib.Error = null;
+        const ok = subprocess.communicateUtf8Finish(result, @ptrCast(&stdout), null, &err) != 0;
+        defer if (stdout) |s| glib.free(@ptrCast(s));
+        if (err) |e| e.free();
+
+        // A failed finish means the lookup was cancelled or superseded.
+        if (!ok or self.private().disposed) return;
+        if (subprocess.getSuccessful() == 0) return;
+
+        const url = std.mem.trim(u8, std.mem.span(stdout orelse return), " \t\r\n");
+        if (url.len == 0) return;
+
+        Application.default().openUrl(.{ .kind = .unknown, .url = url });
     }
 
     fn groupDigits(buf: []u8, n: u64) []const u8 {
@@ -1512,6 +1632,11 @@ pub const SplitHeader = extern struct {
             c.unref();
             priv.git_cancellable = null;
         }
+        if (priv.branch_link_cancellable) |c| {
+            c.cancel();
+            c.unref();
+            priv.branch_link_cancellable = null;
+        }
         if (priv.context_popover) |p| {
             p.as(gtk.Widget).unparent();
             priv.context_popover = null;
@@ -1620,6 +1745,7 @@ pub const SplitHeader = extern struct {
             class.bindTemplateCallback("header_smaller", &headerSmallerClicked);
             class.bindTemplateCallback("header_larger", &headerLargerClicked);
             class.bindTemplateCallback("title_clicked", &titleClicked);
+            class.bindTemplateCallback("branch_clicked", &branchClicked);
             class.bindTemplateCallback("expand_clicked", &expandClicked);
 
             // Properties

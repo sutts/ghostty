@@ -182,31 +182,44 @@ template $GhosttySplitHeader: Adw.Bin {
               halign: end;
               spacing: 8;
 
-              Box branch_box {
+              Button branch_box {
                 styles [
                   "info-pill",
+                  "flat",
+                  "branch-button",
                 ]
 
                 visible: false;
-                spacing: 5;
+                focusable: false;
+                focus-on-click: false;
+                clicked => $branch_clicked();
+                tooltip-text: _("Open pull/merge request, or branch");
 
-                Label {
-                  styles [
-                    "dim",
-                  ]
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
 
-                  label: "⎇";
-                }
+                child: Box {
+                  spacing: 5;
 
-                Label branch_label {
-                  styles [
-                    "mono",
-                  ]
+                  Label {
+                    styles [
+                      "dim",
+                    ]
 
-                  ellipsize: end;
-                  max-width-chars: 32;
-                  single-line-mode: true;
-                }
+                    label: "⎇";
+                  }
+
+                  Label branch_label {
+                    styles [
+                      "mono",
+                    ]
+
+                    ellipsize: end;
+                    max-width-chars: 32;
+                    single-line-mode: true;
+                  }
+                };
               }
 
               Box stats_box {
