@@ -1506,6 +1506,8 @@ pub const Application = extern struct {
             .init("present-surface", actionPresentSurface, t_variant_type),
             .init("quit", actionQuit, null),
             .init("reload-config", actionReloadConfig, null),
+            .init("save-profile", actionSaveProfile, null),
+            .init("restore-profile", actionRestoreProfile, null),
             .init("toggle-quick-terminal", actionToggleQuickTerminal, null),
             .init("ring-bell", actionRingBell, null),
         };
@@ -1664,6 +1666,29 @@ pub const Application = extern struct {
         if (w.maximized) win.as(gtk.Window).maximize();
 
         gtk.Window.present(win.as(gtk.Window));
+    }
+
+    /// Restore a saved profile (see "Save Profile…"/"Restore Profile" in
+    /// the app menu) by opening its windows/tabs/splits alongside whatever
+    /// is currently open. Unlike session restore, this never replaces the
+    /// current session.
+    pub fn restoreProfile(self: *Self, filename: []const u8) !void {
+        const gpa = self.allocator();
+        var loaded = try SessionState.loadProfile(gpa, filename);
+        defer loaded.deinit();
+
+        var restored: usize = 0;
+        for (loaded.profile.state.windows) |w| {
+            self.restoreWindow(w) catch |err| {
+                log.warn("failed to restore a window from profile: {}", .{err});
+                continue;
+            };
+            restored += 1;
+        }
+        log.info(
+            "restored {d} of {d} window(s) from profile '{s}'",
+            .{ restored, loaded.profile.state.windows.len, loaded.profile.name },
+        );
     }
 
     fn dispose(self: *Self) callconv(.c) void {
@@ -1904,6 +1929,158 @@ pub const Application = extern struct {
         const priv = self.private();
         priv.core_app.performAction(self.rt(), .reload_config) catch |err| {
             log.warn("error reloading config err={}", .{err});
+        };
+    }
+
+    /// Handle `app.save-profile`: prompt for a name and save the current
+    /// window/tab/split layout under it.
+    fn actionSaveProfile(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const gpa = self.allocator();
+
+        const entry = gtk.Entry.new();
+        entry.setActivatesDefault(1);
+
+        const dialog = adw.AlertDialog.new(
+            i18n._("Save Profile"),
+            i18n._("Save the current window layout under a name you can restore later."),
+        );
+        dialog.setExtraChild(entry.as(gtk.Widget));
+        dialog.addResponse("cancel", i18n._("Cancel"));
+        dialog.addResponse("save", i18n._("Save"));
+        dialog.setResponseAppearance("save", .suggested);
+        dialog.setDefaultResponse("save");
+        dialog.setCloseResponse("cancel");
+
+        const ctx = gpa.create(SaveProfileCtx) catch |err| {
+            log.warn("failed to allocate save-profile context: {}", .{err});
+            return;
+        };
+        ctx.* = .{ .app = self, .entry = entry };
+
+        const parent = self.as(gtk.Application).getActiveWindow();
+        dialog.choose(
+            if (parent) |w| w.as(gtk.Widget) else null,
+            null,
+            saveProfileDialogReady,
+            ctx,
+        );
+    }
+
+    const SaveProfileCtx = struct {
+        app: *Self,
+        entry: *gtk.Entry,
+    };
+
+    fn saveProfileDialogReady(
+        source: ?*gobject.Object,
+        result: *gio.AsyncResult,
+        ud: ?*anyopaque,
+    ) callconv(.c) void {
+        const ctx: *SaveProfileCtx = @ptrCast(@alignCast(ud.?));
+        defer ctx.app.allocator().destroy(ctx);
+
+        const dialog = gobject.ext.cast(adw.AlertDialog, source.?) orelse return;
+        const response = dialog.chooseFinish(result);
+        if (std.mem.orderZ(u8, "save", response) != .eq) return;
+
+        const name = std.mem.trim(
+            u8,
+            std.mem.span(ctx.entry.getBuffer().getText()),
+            " \t\n\r",
+        );
+        if (name.len == 0) return;
+
+        SessionState.saveProfile(ctx.app, name) catch |err| {
+            log.warn("failed to save profile '{s}': {}", .{ name, err });
+        };
+    }
+
+    /// Handle `app.restore-profile`: let the user pick a saved profile and
+    /// open its windows/tabs/splits alongside whatever is currently open.
+    fn actionRestoreProfile(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const gpa = self.allocator();
+        const parent = self.as(gtk.Application).getActiveWindow();
+
+        const profiles = SessionState.listProfiles(gpa);
+        if (profiles.len == 0) {
+            SessionState.freeProfileEntries(gpa, profiles);
+
+            const dialog = adw.AlertDialog.new(
+                i18n._("No Saved Profiles"),
+                i18n._("Use \"Save Profile…\" to save the current window layout first."),
+            );
+            dialog.addResponse("ok", i18n._("OK"));
+            dialog.as(adw.Dialog).present(if (parent) |w| w.as(gtk.Widget) else null);
+            return;
+        }
+
+        const model = gtk.StringList.new(null);
+        for (profiles) |p| {
+            const name_z = gpa.dupeZ(u8, p.name) catch continue;
+            defer gpa.free(name_z);
+            model.append(name_z);
+        }
+
+        const dropdown = gtk.DropDown.new(model.as(gio.ListModel), null);
+        dropdown.setSelected(0);
+
+        const dialog = adw.AlertDialog.new(i18n._("Restore Profile"), null);
+        dialog.setExtraChild(dropdown.as(gtk.Widget));
+        dialog.addResponse("cancel", i18n._("Cancel"));
+        dialog.addResponse("restore", i18n._("Restore"));
+        dialog.setResponseAppearance("restore", .suggested);
+        dialog.setDefaultResponse("restore");
+        dialog.setCloseResponse("cancel");
+
+        const ctx = gpa.create(RestoreProfileCtx) catch |err| {
+            log.warn("failed to allocate restore-profile context: {}", .{err});
+            SessionState.freeProfileEntries(gpa, profiles);
+            return;
+        };
+        ctx.* = .{ .app = self, .dropdown = dropdown, .profiles = profiles };
+
+        dialog.choose(
+            if (parent) |w| w.as(gtk.Widget) else null,
+            null,
+            restoreProfileDialogReady,
+            ctx,
+        );
+    }
+
+    const RestoreProfileCtx = struct {
+        app: *Self,
+        dropdown: *gtk.DropDown,
+        profiles: []SessionState.ProfileEntry,
+    };
+
+    fn restoreProfileDialogReady(
+        source: ?*gobject.Object,
+        result: *gio.AsyncResult,
+        ud: ?*anyopaque,
+    ) callconv(.c) void {
+        const ctx: *RestoreProfileCtx = @ptrCast(@alignCast(ud.?));
+        defer {
+            SessionState.freeProfileEntries(ctx.app.allocator(), ctx.profiles);
+            ctx.app.allocator().destroy(ctx);
+        }
+
+        const dialog = gobject.ext.cast(adw.AlertDialog, source.?) orelse return;
+        const response = dialog.chooseFinish(result);
+        if (std.mem.orderZ(u8, "restore", response) != .eq) return;
+
+        const idx = ctx.dropdown.getSelected();
+        if (idx == gtk.INVALID_LIST_POSITION or idx >= ctx.profiles.len) return;
+
+        ctx.app.restoreProfile(ctx.profiles[idx].filename) catch |err| {
+            log.warn("failed to restore profile: {}", .{err});
         };
     }
 

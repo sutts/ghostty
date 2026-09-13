@@ -97,12 +97,9 @@ pub fn save(app: *Application) void {
     };
 }
 
-fn saveInner(app: *Application) !void {
-    const gpa = app.allocator();
-    var arena_state: std.heap.ArenaAllocator = .init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
+/// Walk all open toplevel windows and collect their layout into
+/// `WindowState`s, skipping any window with no surfaces.
+fn collectWindowStates(arena: Allocator) ![]WindowState {
     var windows: std.ArrayList(WindowState) = .empty;
 
     const list = gtk.Window.listToplevels();
@@ -121,6 +118,17 @@ fn saveInner(app: *Application) !void {
         if (ws.tabs.len > 0) try windows.append(arena, ws);
     }
 
+    return windows.items;
+}
+
+fn saveInner(app: *Application) !void {
+    const gpa = app.allocator();
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const windows = try collectWindowStates(arena);
+
     // If we found nothing to save, leave whatever's already on disk alone
     // rather than overwriting it with an empty session. This matters
     // because closing an app's last window saves state right before that
@@ -129,19 +137,21 @@ fn saveInner(app: *Application) !void {
     // its own force-quit cleanup, which must not clobber that save with
     // an empty one just because, by then, there's genuinely nothing left
     // to walk.
-    if (windows.items.len == 0) {
+    if (windows.len == 0) {
         log.debug("session state save skipped: no windows with surfaces to save", .{});
         return;
     }
 
     var total_tabs: usize = 0;
-    for (windows.items) |w| total_tabs += w.tabs.len;
+    for (windows) |w| total_tabs += w.tabs.len;
 
-    const state: State = .{ .windows = windows.items };
-    try writeState(gpa, &state);
+    const state: State = .{ .windows = windows };
+    const path = try statePath(gpa);
+    defer gpa.free(path);
+    try writeJsonFile(path, state);
     log.info(
         "session state saved: {d} window(s), {d} tab(s)",
-        .{ windows.items.len, total_tabs },
+        .{ windows.len, total_tabs },
     );
 }
 
@@ -298,10 +308,7 @@ fn readFile(alloc: Allocator, path: []const u8) ![]const u8 {
     return try reader.interface.allocRemaining(alloc, .limited(max_state_file_size));
 }
 
-fn writeState(gpa: Allocator, state: *const State) !void {
-    const path = try statePath(gpa);
-    defer gpa.free(path);
-
+fn writeJsonFile(path: []const u8, value: anytype) !void {
     const dir_path = std.fs.path.dirname(path) orelse return error.InvalidSessionPath;
     std.Io.Dir.cwd().createDirPath(global.io(), dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -318,9 +325,191 @@ fn writeState(gpa: Allocator, state: *const State) !void {
 
     var buf: [4096]u8 = undefined;
     var file_writer = atomic_file.file.writer(global.io(), &buf);
-    try file_writer.interface.print("{f}\n", .{std.json.fmt(state.*, .{
+    try file_writer.interface.print("{f}\n", .{std.json.fmt(value, .{
         .whitespace = .indent_2,
     })});
     try file_writer.flush();
     try atomic_file.replace(global.io());
+}
+
+/// A named, user-saved layout snapshot (see "Save Profile…"/"Restore
+/// Profile" in the app menu). Unlike the automatic `State` session file,
+/// profiles are explicit, multiple, and never overwritten except by
+/// re-saving under the same name.
+pub const ProfileFile = struct {
+    /// Display name, as entered by the user. Kept separately from the
+    /// on-disk filename (which is a sanitized version of this) so the
+    /// original name -- including characters not safe in a filename --
+    /// round-trips exactly for display.
+    name: []const u8,
+    state: State,
+};
+
+/// One entry in the saved-profiles list.
+pub const ProfileEntry = struct {
+    name: []const u8,
+    /// Filename (including the .json extension) inside the profiles
+    /// directory. Pass this to `loadProfile` to load this specific entry.
+    filename: []const u8,
+};
+
+fn profilesDir(alloc: Allocator) ![]const u8 {
+    var environ_map = try global.environMap();
+    defer environ_map.deinit();
+    const state_dir = try internal_os.xdg.state(
+        global.io(),
+        alloc,
+        &environ_map,
+        .{ .subdir = "ghostty" },
+    );
+    defer alloc.free(state_dir);
+    return try std.fs.path.join(alloc, &.{ state_dir, "profiles" });
+}
+
+/// Turn a user-entered profile name into a filesystem-safe file stem.
+/// Path separators and control characters become `_`; everything else
+/// (including spaces and non-ASCII text) passes through unchanged. This
+/// also neutralizes `.`/`..` as meaningful path segments, since the result
+/// always has `.json` appended before being joined to the profiles
+/// directory.
+fn sanitizeFilename(alloc: Allocator, name: []const u8) ![]u8 {
+    const out = try alloc.dupe(u8, name);
+    for (out) |*c| {
+        if (c.* == '/' or c.* == '\\' or c.* < 0x20 or c.* == 0x7f) c.* = '_';
+    }
+    return out;
+}
+
+fn profilePathForName(alloc: Allocator, name: []const u8) ![]const u8 {
+    const stem = try sanitizeFilename(alloc, name);
+    defer alloc.free(stem);
+    const filename = try std.fmt.allocPrint(alloc, "{s}.json", .{stem});
+    defer alloc.free(filename);
+    return try profilePathForFilename(alloc, filename);
+}
+
+fn profilePathForFilename(alloc: Allocator, filename: []const u8) ![]const u8 {
+    const dir = try profilesDir(alloc);
+    defer alloc.free(dir);
+    return try std.fs.path.join(alloc, &.{ dir, filename });
+}
+
+/// Save the current window/tab/split layout under the given name,
+/// overwriting any existing profile with the same name. Unlike `save`,
+/// this always runs regardless of `window-save-state` -- it's an explicit
+/// user action, not the automatic quit-time save.
+pub fn saveProfile(app: *Application, name: []const u8) !void {
+    const gpa = app.allocator();
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const windows = try collectWindowStates(arena);
+    const profile: ProfileFile = .{ .name = name, .state = .{ .windows = windows } };
+
+    const path = try profilePathForName(gpa, name);
+    defer gpa.free(path);
+    try writeJsonFile(path, profile);
+
+    var total_tabs: usize = 0;
+    for (windows) |w| total_tabs += w.tabs.len;
+    log.info(
+        "profile '{s}' saved: {d} window(s), {d} tab(s)",
+        .{ name, windows.len, total_tabs },
+    );
+}
+
+/// List saved profiles, sorted by display name. Never fails the caller;
+/// errors (including the profiles directory not existing yet) are logged
+/// and an empty list is returned. The caller must free the result with
+/// `freeProfileEntries`.
+pub fn listProfiles(gpa: Allocator) []ProfileEntry {
+    return listProfilesInner(gpa) catch |err| {
+        log.warn("failed to list saved profiles: {}", .{err});
+        return &.{};
+    };
+}
+
+fn listProfilesInner(gpa: Allocator) ![]ProfileEntry {
+    const dir_path = try profilesDir(gpa);
+    defer gpa.free(dir_path);
+
+    var dir = std.Io.Dir.cwd().openDir(global.io(), dir_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => return err,
+    };
+    defer dir.close(global.io());
+
+    var entries: std.ArrayList(ProfileEntry) = .empty;
+
+    var it = dir.iterate();
+    while (try it.next(global.io())) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
+
+        const path = try std.fs.path.join(gpa, &.{ dir_path, entry.name });
+        defer gpa.free(path);
+        const content = readFile(gpa, path) catch |err| {
+            log.warn("failed to read profile file {s}: {}", .{ entry.name, err });
+            continue;
+        };
+        defer gpa.free(content);
+
+        const parsed = std.json.parseFromSlice(
+            ProfileFile,
+            gpa,
+            content,
+            .{ .ignore_unknown_fields = true },
+        ) catch |err| {
+            log.warn("failed to parse profile file {s}: {}", .{ entry.name, err });
+            continue;
+        };
+        defer parsed.deinit();
+
+        try entries.append(gpa, .{
+            .name = try gpa.dupe(u8, parsed.value.name),
+            .filename = try gpa.dupe(u8, entry.name),
+        });
+    }
+
+    std.mem.sort(ProfileEntry, entries.items, {}, struct {
+        fn lessThan(_: void, a: ProfileEntry, b: ProfileEntry) bool {
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.lessThan);
+
+    return try entries.toOwnedSlice(gpa);
+}
+
+pub fn freeProfileEntries(gpa: Allocator, entries: []ProfileEntry) void {
+    for (entries) |e| {
+        gpa.free(e.name);
+        gpa.free(e.filename);
+    }
+    gpa.free(entries);
+}
+
+/// A loaded profile file, along with the arena backing it. Call `deinit`
+/// when done with `profile`.
+pub const LoadedProfile = struct {
+    arena: std.heap.ArenaAllocator,
+    profile: ProfileFile,
+
+    pub fn deinit(self: *LoadedProfile) void {
+        self.arena.deinit();
+    }
+};
+
+/// Load a saved profile by its on-disk filename (as returned by
+/// `listProfiles`).
+pub fn loadProfile(gpa: Allocator, filename: []const u8) !LoadedProfile {
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const path = try profilePathForFilename(arena, filename);
+    const content = try readFile(arena, path);
+    const profile = try std.json.parseFromSliceLeaky(ProfileFile, arena, content, .{});
+
+    return .{ .arena = arena_state, .profile = profile };
 }
