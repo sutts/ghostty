@@ -13,6 +13,54 @@
 # build would reject the options it doesn't know. --install adds an optional
 # include of that file to the main config, since the installed launcher
 # can't pass --config-file itself.
+#
+# ---------------------------------------------------------------------------
+# Dependencies
+#
+# This just wraps `zig build`, so anything needed to build upstream Ghostty
+# from a Git checkout is needed here too. `nix/devShell.nix` is the
+# authoritative list (it's what Ghostty's own CI builds against); the
+# summary below is what actually matters for this script to succeed:
+#
+#   - zig, at the version pinned by `minimum_zig_version` in build.zig.zon
+#     (0.16.0 as of this writing). Run `zig version` to check; most distro
+#     packages lag behind, so you may need a manual install from
+#     https://ziglang.org/download/.
+#   - pkg-config, used by the build to find every library below.
+#   - blueprint-compiler >= 0.16.0 (a *build-time* tool, not a library) --
+#     compiles the .blp UI files under src/apprt/gtk/ui/, including this
+#     fork's split-header.blp, into the .ui XML GTK actually loads.
+#   - GTK4 + libadwaita development files (gtk4, libadwaita-1), and their
+#     own dependencies' dev files: glib2, harfbuzz, freetype2, fontconfig,
+#     oniguruma, bzip2, libxml2, zlib.
+#   - Windowing system dev files -- at least one of:
+#       X11:     libX11, libXcursor, libXext, libXi, libXinerama, libXrandr
+#       Wayland: wayland, wayland-protocols (needs the wayland-scanner tool)
+#   - gtk4-layer-shell -- optional, only needed for Wayland layer-shell
+#     support (e.g. the quick terminal).
+#
+#   Fedora (dnf):
+#     sudo dnf install zig pkgconf-pkg-config blueprint-compiler \
+#       gtk4-devel libadwaita-devel gtk4-layer-shell-devel \
+#       glib2-devel harfbuzz-devel freetype-devel fontconfig-devel \
+#       oniguruma-devel bzip2-devel libxml2-devel zlib-devel \
+#       libX11-devel libXcursor-devel libXext-devel libXi-devel \
+#       libXinerama-devel libXrandr-devel wayland-devel wayland-protocols-devel
+#
+#   Debian/Ubuntu (apt): the same list with "-devel" swapped for "-dev"
+#   (e.g. libgtk-4-dev, libadwaita-1-dev, libglib2.0-dev); `apt search
+#   <name>` if one of these has drifted.
+#
+#   Not needed to build -- only at *runtime*, and only for this fork's
+#   avatar / app-icon picker (its context menu shells out to these; see
+#   set_app_icon_script and set_default_avatar_script below):
+#     - python3 with Pillow (`python3-pillow`, or `pip install Pillow`) --
+#       resizes a chosen image into every icon size Ghostty needs.
+#     - python-xlib (`python3-xlib`) -- optional, only used to push the new
+#       icon to already-open windows' taskbar entries on X11.
+#     - ImageMagick's `convert` -- optional fallback resizer if PIL isn't
+#       installed.
+# ---------------------------------------------------------------------------
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
@@ -36,10 +84,7 @@ config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
 config="${SPLIT_HEADER_CONFIG:-$config_dir/split-header.conf}"
 if [[ ! -f "$config" ]]; then
     avatar_dir="$config_dir/avatars"
-    if [[ -d "$HOME/Projects/waveterm/avatar-gallery/images" ]]; then
-        avatar_dir="$HOME/Projects/waveterm/avatar-gallery/images"
-    fi
-    mkdir -p "$(dirname "$config")"
+    mkdir -p "$avatar_dir"
     cat >"$config" <<EOF
 split-header = true
 split-header-style = portrait

@@ -1104,7 +1104,7 @@ palette: Palette = .{},
 /// The avatar shown in split headers that haven't had one picked, as a file
 /// name inside `split-header-avatar-dir`. If the file doesn't exist the
 /// header shows a placeholder icon instead.
-@"split-header-default-avatar": ?[:0]const u8 = "sutts_avatar.jpg",
+@"split-header-default-avatar": ?[:0]const u8 = null,
 
 /// The layout of the split header when `split-header` is enabled. Each split
 /// can also pick its own style from the context menu.
