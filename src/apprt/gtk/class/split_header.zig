@@ -477,8 +477,9 @@ pub const SplitHeader = extern struct {
             priv.pwd_box.addCssClass("pwd-remote");
             priv.pwd_icon.setFromIconName("network-server-symbolic");
             var buf: [256]u8 = undefined;
+            var host_buf: [256]u8 = undefined;
             const label = if (priv.hostname) |host|
-                std.fmt.bufPrintZ(&buf, "SSH: {s}", .{host}) catch "SSH"
+                std.fmt.bufPrintZ(&buf, "SSH: {s}", .{shortHostname(&host_buf, host)}) catch "SSH"
             else
                 "SSH";
             priv.pwd_label.setLabel(label);
@@ -525,8 +526,18 @@ pub const SplitHeader = extern struct {
             priv.host_box.setTooltipText("Local Host");
         }
 
-        priv.host_label.setLabel(host);
+        var host_buf: [256]u8 = undefined;
+        priv.host_label.setLabel(shortHostname(&host_buf, host));
         priv.host_box.setVisible(1);
+    }
+
+    /// Trims a fully-qualified hostname down to just its leading label
+    /// (e.g. "cheetah.office.countculture.com" -> "cheetah") so it doesn't
+    /// take up excessive space in the header. The full hostname is still
+    /// used in tooltips.
+    fn shortHostname(buf: []u8, host: [:0]const u8) [:0]const u8 {
+        const dot = std.mem.indexOfScalar(u8, host, '.') orelse return host;
+        return std.fmt.bufPrintZ(buf, "{s}", .{host[0..dot]}) catch host;
     }
 
     fn shortenHome(buf: []u8, path: [:0]const u8) [:0]const u8 {
