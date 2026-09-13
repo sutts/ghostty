@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build this fork of Ghostty and run it with the split header enabled.
+# Build this fork of Ghostty and run it.
 #
 #   ./build-and-run.sh               optimized build
 #   ./build-and-run.sh --debug       debug build (quicker to compile, slow to run)
@@ -7,12 +7,9 @@
 #                                    ~/.local) instead of running
 #   ./build-and-run.sh -- [args...]  pass extra arguments to ghostty
 #
-# Split header settings live in $SPLIT_HEADER_CONFIG (default
-# ~/.config/ghostty/split-header.conf), created with defaults on first run.
-# They're kept out of the main Ghostty config because an official Ghostty
-# build would reject the options it doesn't know. --install adds an optional
-# include of that file to the main config, since the installed launcher
-# can't pass --config-file itself.
+# The split header is on by default; its settings (split-header-*) go in
+# the normal Ghostty config. An official Ghostty build rejects options it
+# doesn't know, so remove them if switching back.
 #
 # ---------------------------------------------------------------------------
 # Dependencies
@@ -81,42 +78,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
-config="${SPLIT_HEADER_CONFIG:-$config_dir/split-header.conf}"
-if [[ ! -f "$config" ]]; then
-    avatar_dir="$config_dir/avatars"
-    mkdir -p "$avatar_dir"
-    cat >"$config" <<EOF
-split-header = true
-split-header-style = portrait
-split-header-avatar-dir = $avatar_dir
-EOF
-    echo "created $config"
-fi
 
 # Pinning the version stops the build stamping in the git commit and dirty
 # state, which otherwise forces a full recompile after every commit or edit.
 version="1.3.2-sutts"
 build_args=(-Doptimize="$optimize" -Dversion-string="$version" -Dlib-version-string="$version")
 
-# Ghostty 1.3 reads config.ghostty, falling back to the older plain "config".
-main_config="$config_dir/config.ghostty"
-if [[ ! -f "$main_config" && -f "$config_dir/config" ]]; then
-    main_config="$config_dir/config"
-fi
-include="config-file = ?$config"
-
 if ! $install; then
     zig build "${build_args[@]}"
 
     # Run as a separate instance so the window isn't handed to an
     # already-running official Ghostty, which has no split header support.
-    # If the main config already includes split-header.conf, don't pass it again
-    # via --config-file to avoid duplicate include warnings.
-    extra_args=()
-    if ! grep -qxF "$include" "$main_config" 2>/dev/null; then
-        extra_args=(--config-file="$config")
-    fi
-    exec ./zig-out/bin/ghostty --gtk-single-instance=false "${extra_args[@]}" "$@"
+    exec ./zig-out/bin/ghostty --gtk-single-instance=false "$@"
 fi
 
 # The prefix is baked into the desktop file, D-Bus service and systemd unit,
@@ -141,12 +114,6 @@ if os.path.isfile(src):
 " 2>/dev/null || true
     gtk-update-icon-cache -f -t "$prefix/share/icons/hicolor" 2>/dev/null || true
     echo "preserved custom app icon"
-fi
-
-if ! grep -qxF "$include" "$main_config" 2>/dev/null; then
-    mkdir -p "$(dirname "$main_config")"
-    printf '\n# Split header settings (Sutts build only; remove if switching back\n# to an official Ghostty, which rejects them).\n%s\n' "$include" >>"$main_config"
-    echo "added split header include to $main_config"
 fi
 
 systemctl --user daemon-reload 2>/dev/null || true

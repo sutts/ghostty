@@ -192,11 +192,15 @@ const set_app_icon_script =
     \\gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.Cinnamon.ReloadTheme 2>/dev/null || true
 ;
 
-/// Script to persist the default avatar in split-header.conf.
+/// Script to persist the default avatar in the main Ghostty config
+/// (config.ghostty, falling back to the older plain "config").
 const set_default_avatar_script =
     \\set -e
     \\SRC="$1"
-    \\CONF="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/split-header.conf"
+    \\DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
+    \\CONF="$DIR/config.ghostty"
+    \\if [ ! -f "$CONF" ] && [ -f "$DIR/config" ]; then CONF="$DIR/config"; fi
+    \\mkdir -p "$DIR"
     \\if [ -z "$SRC" ] || [ "$SRC" = "none" ]; then
     \\    sed -i '/^[[:space:]]*split-header-default-avatar/d' "$CONF" 2>/dev/null || true
     \\    exit 0
@@ -925,13 +929,26 @@ pub const SplitHeader = extern struct {
         defer config.unref();
         const configured = config.get().@"split-header-avatar-dir" orelse {
             const config_dir = std.mem.span(glib.getUserConfigDir());
-            return std.fmt.bufPrintZ(buf, "{s}/ghostty/avatars", .{config_dir}) catch null;
+            const dir = std.fmt.bufPrintZ(buf, "{s}/ghostty/avatars", .{config_dir}) catch {
+                log.warn("avatar dir: default path too long for buffer", .{});
+                return null;
+            };
+            log.info("avatar dir: split-header-avatar-dir unset, using default {s}", .{dir});
+            return dir;
         };
-        if (std.mem.startsWith(u8, configured, "~/")) {
-            const home = std.mem.span(glib.getHomeDir());
-            return std.fmt.bufPrintZ(buf, "{s}{s}", .{ home, configured[1..] }) catch null;
-        }
-        return std.fmt.bufPrintZ(buf, "{s}", .{configured}) catch null;
+        const dir = dir: {
+            if (std.mem.startsWith(u8, configured, "~/")) {
+                const home = std.mem.span(glib.getHomeDir());
+                break :dir std.fmt.bufPrintZ(buf, "{s}{s}", .{ home, configured[1..] }) catch null;
+            }
+            break :dir std.fmt.bufPrintZ(buf, "{s}", .{configured}) catch null;
+        } orelse {
+            log.warn("avatar dir: configured path too long for buffer: {s}", .{configured});
+            return null;
+        };
+        const exists = glib.fileTest(dir, .{ .is_dir = true }) != 0;
+        log.info("avatar dir: split-header-avatar-dir={s} resolved={s} is_dir={}", .{ configured, dir, exists });
+        return dir;
     }
 
     fn isAvatarFile(name: []const u8) bool {
@@ -1110,6 +1127,7 @@ pub const SplitHeader = extern struct {
         defer launcher.unref();
 
         const path_arg: [:0]const u8 = if (path_) |p| p else "";
+        log.info("default avatar: saving split-header-default-avatar={s} to main config", .{path_arg});
         const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", set_default_avatar_script, "sh", path_arg.ptr };
         var err: ?*glib.Error = null;
         const subprocess = launcher.spawnv(@ptrCast(&argv), &err) orelse {
@@ -1172,14 +1190,21 @@ pub const SplitHeader = extern struct {
         }
 
         var dir_buf: [4096]u8 = undefined;
-        const dir_path = avatarDir(&dir_buf) orelse return;
+        const dir_path = avatarDir(&dir_buf) orelse {
+            log.warn("avatar picker: no avatar dir could be resolved", .{});
+            return;
+        };
         var err: ?*glib.Error = null;
         const dir = glib.Dir.open(dir_path, 0, &err) orelse {
+            log.warn("avatar picker: unable to open avatar dir {s}: {s}", .{
+                dir_path,
+                if (err) |e| std.mem.span(e.f_message orelse "unknown error") else "unknown error",
+            });
             if (err) |e| e.free();
-            log.warn("unable to open split header avatar dir {s}", .{dir_path});
             return;
         };
         defer dir.close();
+        log.info("avatar picker: listing {s}", .{dir_path});
 
         const flow = gtk.FlowBox.new();
         flow.setSelectionMode(.none);
@@ -1191,21 +1216,37 @@ pub const SplitHeader = extern struct {
         none_icon.setPixelSize(24);
         flow.append(self.makeChoiceButton(none_icon.as(gtk.Widget), no_avatar_name, "No avatar"));
 
+        var seen: usize = 0;
+        var loaded: usize = 0;
         while (g_dir_read_name(dir)) |name_ptr| {
             const name = std.mem.span(name_ptr);
-            if (!isAvatarFile(name)) continue;
+            seen += 1;
+            if (!isAvatarFile(name)) {
+                log.debug("avatar picker: skipping {s} (not an image extension)", .{name});
+                continue;
+            }
             var path_buf: [4096]u8 = undefined;
-            const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir_path, name }) catch continue;
+            const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir_path, name }) catch {
+                log.warn("avatar picker: path too long, skipping {s}", .{name});
+                continue;
+            };
             const texture = gdk.Texture.newFromFilename(path, &err) orelse {
+                log.warn("avatar picker: unable to load {s}: {s}", .{
+                    path,
+                    if (err) |e| std.mem.span(e.f_message orelse "unknown error") else "unknown error",
+                });
                 if (err) |e| e.free();
                 err = null;
                 continue;
             };
             defer texture.unref();
+            loaded += 1;
+            log.debug("avatar picker: loaded {s}", .{path});
             const image = gtk.Image.newFromPaintable(texture.as(gdk.Paintable));
             image.setPixelSize(48);
             flow.append(self.makeChoiceButton(image.as(gtk.Widget), path, name));
         }
+        log.info("avatar picker: {d} entries in {s}, {d} avatars loaded", .{ seen, dir_path, loaded });
 
         const scroller = gtk.ScrolledWindow.new();
         scroller.setPolicy(.never, .automatic);
@@ -1283,12 +1324,25 @@ pub const SplitHeader = extern struct {
     fn loadDefaultAvatar(self: *Self) void {
         const config = Application.default().getConfig();
         defer config.unref();
-        const name = config.get().@"split-header-default-avatar" orelse return;
+        const name = config.get().@"split-header-default-avatar" orelse {
+            log.info("default avatar: split-header-default-avatar unset, using placeholder icon", .{});
+            return;
+        };
         var dir_buf: [4096]u8 = undefined;
-        const dir = avatarDir(&dir_buf) orelse return;
+        const dir = avatarDir(&dir_buf) orelse {
+            log.warn("default avatar: no avatar dir could be resolved for {s}", .{name});
+            return;
+        };
         var path_buf: [4096]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir, name }) catch return;
-        if (glib.fileTest(path, .{ .is_regular = true }) == 0) return;
+        const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir, name }) catch {
+            log.warn("default avatar: path too long for {s}/{s}", .{ dir, name });
+            return;
+        };
+        if (glib.fileTest(path, .{ .is_regular = true }) == 0) {
+            log.warn("default avatar: {s} does not exist or is not a regular file", .{path});
+            return;
+        }
+        log.info("default avatar: loading {s}", .{path});
         self.setAvatar(path);
     }
 
@@ -1306,17 +1360,22 @@ pub const SplitHeader = extern struct {
             priv.current_avatar_path = null;
         }
         const path = path_ orelse {
+            log.debug("set avatar: cleared, using placeholder icon", .{});
             priv.avatar_image.setFromIconName("avatar-default-symbolic");
             self.applyAccent(null);
             return;
         };
         var err: ?*glib.Error = null;
         const texture = gdk.Texture.newFromFilename(path, &err) orelse {
+            log.warn("set avatar: unable to load {s}: {s}", .{
+                path,
+                if (err) |e| std.mem.span(e.f_message orelse "unknown error") else "unknown error",
+            });
             if (err) |e| e.free();
-            log.warn("unable to load avatar {s}", .{path});
             return;
         };
         defer texture.unref();
+        log.info("set avatar: loaded {s} ({d}x{d})", .{ path, texture.getWidth(), texture.getHeight() });
         priv.avatar_image.setFromPaintable(texture.as(gdk.Paintable));
         self.applyAccent(sampleAccent(texture));
     }
