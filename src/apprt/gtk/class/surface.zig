@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = @import("../../../quirks.zig").inlineAssert;
 const Allocator = std.mem.Allocator;
 const adw = @import("adw");
+const cairo = @import("cairo");
 const gdk = @import("gdk");
 const gio = @import("gio");
 const glib = @import("glib");
@@ -658,6 +659,14 @@ pub const Surface = extern struct {
         /// True once a header style has been picked for this split from the
         /// context menu, which shows the header even if the config doesn't.
         split_header_forced: bool = false,
+
+        /// Tiled warning text drawn over the terminal (below the header)
+        /// while split_header has marked this split dangerous. Driven by
+        /// SplitHeader.setDanger via setDangerWatermark; null/hidden
+        /// otherwise.
+        danger_watermark: *gtk.DrawingArea,
+        danger_watermark_text_buf: [256]u8 = undefined,
+        danger_watermark_text: ?[:0]const u8 = null,
 
         /// The apprt Surface.
         rt_surface: ApprtSurface = undefined,
@@ -1884,6 +1893,10 @@ pub const Surface = extern struct {
         self.as(gtk.Widget).setCursorFromName("text");
         priv.drag_handle.setCursorFromName("grab");
 
+        // GtkDrawingArea has no draw signal, so its draw function has to be
+        // wired up in code rather than the Blueprint file.
+        priv.danger_watermark.setDrawFunc(dangerWatermarkDraw, self, null);
+
         // Initialize our config
         self.propConfig(undefined, null);
     }
@@ -2881,6 +2894,72 @@ pub const Surface = extern struct {
         } else {
             widget.removeCssClass("split-header-on");
             widget.setOverflow(.visible);
+        }
+    }
+
+    /// Called by our SplitHeader to show or clear the tiled warning
+    /// watermark over the terminal content. `text` is null when the split
+    /// is no longer marked dangerous.
+    pub fn setDangerWatermark(self: *Self, text: ?[:0]const u8) void {
+        const priv = self.private();
+        if (text) |t| {
+            const n = @min(priv.danger_watermark_text_buf.len - 1, t.len);
+            @memcpy(priv.danger_watermark_text_buf[0..n], t[0..n]);
+            priv.danger_watermark_text_buf[n] = 0;
+            priv.danger_watermark_text = priv.danger_watermark_text_buf[0..n :0];
+        } else {
+            priv.danger_watermark_text = null;
+        }
+        priv.danger_watermark.as(gtk.Widget).setVisible(
+            @intFromBool(priv.danger_watermark_text != null),
+        );
+        priv.danger_watermark.as(gtk.Widget).queueDraw();
+    }
+
+    /// Tiles `danger_watermark_text` diagonally across the terminal area,
+    /// below wherever the split header ends. Plain Cairo text (no Pango) is
+    /// plenty for a low-opacity watermark and keeps this to one dependency.
+    fn dangerWatermarkDraw(
+        _: *gtk.DrawingArea,
+        cr: *cairo.Context,
+        width: c_int,
+        height: c_int,
+        ud: ?*anyopaque,
+    ) callconv(.c) void {
+        const self: *Self = @ptrCast(@alignCast(ud orelse return));
+        const priv = self.private();
+        const text = priv.danger_watermark_text orelse return;
+
+        const w: f64 = @floatFromInt(width);
+        const h: f64 = @floatFromInt(height);
+        const header_h: f64 = @floatFromInt(priv.split_header.as(gtk.Widget).getHeight());
+        if (h <= header_h) return;
+
+        cr.save();
+        defer cr.restore();
+        cr.rectangle(0, header_h, w, h - header_h);
+        cr.clip();
+
+        cr.selectFontFace("monospace", .normal, .bold);
+        cr.setFontSize(16);
+        cr.setSourceRgba(0.94, 0.27, 0.27, 0.16);
+
+        cr.translate(w / 2, header_h + (h - header_h) / 2);
+        cr.rotate(-0.32);
+
+        const step_x: f64 = 190;
+        const step_y: f64 = 70;
+        // The rotated tiling is centered on the terminal area, so covering
+        // a span of width + height in every direction keeps the corners
+        // filled after rotation regardless of aspect ratio.
+        const span = w + h;
+        var row: f64 = -span;
+        while (row < span) : (row += step_y) {
+            var col: f64 = -span;
+            while (col < span) : (col += step_x) {
+                cr.moveTo(col, row);
+                cr.showText(text);
+            }
         }
     }
 
@@ -4132,6 +4211,7 @@ pub const Surface = extern struct {
             class.bindTemplateChildPrivate("search_overlay", .{});
             class.bindTemplateChildPrivate("key_state_overlay", .{});
             class.bindTemplateChildPrivate("split_header", .{});
+            class.bindTemplateChildPrivate("danger_watermark", .{});
             class.bindTemplateChildPrivate("terminal_page", .{});
             class.bindTemplateChildPrivate("drop_target", .{});
             class.bindTemplateChildPrivate("surface_drop_target", .{});

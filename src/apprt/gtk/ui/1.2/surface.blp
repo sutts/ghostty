@@ -185,6 +185,35 @@ Overlay terminal_page {
   }
 
   [overlay]
+  // Red frame shown around a split the header has marked as dangerous. A
+  // separate widget from split_accent_border so a chosen avatar accent
+  // color never dims or races with it.
+  Box split_danger_border {
+    styles [
+      "split-danger-border",
+    ]
+
+    halign: fill;
+    valign: fill;
+    can-focus: false;
+    can-target: false;
+    focusable: false;
+  }
+
+  [overlay]
+  // Tiled warning text drawn over the terminal content (below the split
+  // header) while the header has marked this split dangerous. Its draw
+  // function is wired up in code since GtkDrawingArea has no such signal.
+  DrawingArea danger_watermark {
+    visible: false;
+    halign: fill;
+    valign: fill;
+    can-focus: false;
+    can-target: false;
+    focusable: false;
+  }
+
+  [overlay]
   $GhosttySurfaceChildExited child_exited_overlay {
     visible: bind template.child-exited;
     close-request => $child_exited_close();

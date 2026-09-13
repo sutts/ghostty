@@ -14,6 +14,28 @@ template $GhosttySplitHeader: Adw.Bin {
     Box {
       orientation: vertical;
 
+      Box danger_strip {
+        styles [
+          "danger-strip",
+        ]
+
+        visible: false;
+        orientation: horizontal;
+        spacing: 6;
+
+        Image {
+          icon-name: "dialog-warning-symbolic";
+          pixel-size: 12;
+        }
+
+        Label danger_label {
+          xalign: 0.0;
+          hexpand: true;
+          ellipsize: end;
+          single-line-mode: true;
+        }
+      }
+
       Box {
         styles [
           "split-header-top",
@@ -244,6 +266,22 @@ template $GhosttySplitHeader: Adw.Bin {
             focusable: false;
             focus-on-click: false;
             clicked => $expand_clicked();
+
+            cursor: Gdk.Cursor {
+              name: "pointer";
+            };
+          }
+
+          Button danger_button {
+            styles [
+              "flat",
+            ]
+
+            icon-name: "dialog-warning-symbolic";
+            tooltip-text: _("Mark Split as Dangerous");
+            focusable: false;
+            focus-on-click: false;
+            clicked => $danger_clicked();
 
             cursor: Gdk.Cursor {
               name: "pointer";

@@ -271,6 +271,12 @@ pub const SplitHeader = extern struct {
         size_step: i8 = 0,
         size_touched: bool = false,
 
+        /// Whether this split is marked dangerous. Purely a runtime, in
+        /// memory choice, like style_override; it doesn't survive a config
+        /// reload.
+        danger: bool = false,
+        danger_text_buf: [256]u8 = undefined,
+
         /// The theme picker, built on first use and kept since the list of
         /// themes doesn't change while running.
         theme_picker: ?*gtk.Popover = null,
@@ -281,6 +287,9 @@ pub const SplitHeader = extern struct {
 
         // Template binds
         expand_button: *gtk.Button,
+        danger_button: *gtk.Button,
+        danger_strip: *gtk.Widget,
+        danger_label: *gtk.Label,
         theme_button: *gtk.Button,
         style_button: *gtk.Button,
         smaller_button: *gtk.Button,
@@ -385,6 +394,7 @@ pub const SplitHeader = extern struct {
     fn updateTitle(self: *Self) void {
         const priv = self.private();
         priv.title_label.setLabel(priv.title_override orelse priv.title orelse "Terminal");
+        if (priv.danger) self.pushDangerState();
     }
 
     fn updatePwd(self: *Self) void {
@@ -550,6 +560,63 @@ pub const SplitHeader = extern struct {
         defer child.as(gobject.Object).unref();
         from.remove(child);
         to.append(child);
+    }
+
+    //---------------------------------------------------------------
+    // Danger
+
+    fn dangerClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        self.setDanger(!self.private().danger);
+    }
+
+    pub fn setDanger(self: *Self, danger: bool) void {
+        self.private().danger = danger;
+        self.applyDanger();
+    }
+
+    fn applyDanger(self: *Self) void {
+        const priv = self.private();
+        const root = self.as(gtk.Widget);
+        if (priv.danger) {
+            root.addCssClass("danger-on");
+        } else {
+            root.removeCssClass("danger-on");
+        }
+        priv.danger_strip.setVisible(@intFromBool(priv.danger));
+        priv.danger_button.as(gtk.Widget).setTooltipText(
+            if (priv.danger) "Dangerous Split (click to clear)" else "Mark Split as Dangerous",
+        );
+        self.pushDangerState();
+    }
+
+    /// Pushes the current danger flag to the enclosing surface: the frame
+    /// border around the whole split (a CSS class, same trick as the avatar
+    /// accent border) and the tiled watermark over the terminal content
+    /// (which needs the actual Surface, since it's driven from code).
+    fn pushDangerState(self: *Self) void {
+        const priv = self.private();
+        const text: ?[:0]const u8 = if (priv.danger) self.updateDangerLabel() else null;
+        const widget = self.findSurface() orelse return;
+        if (priv.danger) {
+            widget.addCssClass("split-danger-on");
+        } else {
+            widget.removeCssClass("split-danger-on");
+        }
+        if (gobject.ext.cast(Surface, widget)) |surface| surface.setDangerWatermark(text);
+    }
+
+    /// Upper-cases the current title into the danger strip (and returns it
+    /// for the watermark), so the warning reads at a glance
+    /// ("PROD-DB-PRIMARY" rather than "prod-db-primary").
+    fn updateDangerLabel(self: *Self) [:0]const u8 {
+        const priv = self.private();
+        const text = priv.title_override orelse priv.title orelse "Terminal";
+        const n = @min(priv.danger_text_buf.len - 1, text.len);
+        for (text[0..n], 0..) |c, i| priv.danger_text_buf[i] = std.ascii.toUpper(c);
+        priv.danger_text_buf[n] = 0;
+        const result = priv.danger_text_buf[0..n :0];
+        priv.danger_label.setLabel(result);
+        return result;
     }
 
     //---------------------------------------------------------------
@@ -1486,6 +1553,9 @@ pub const SplitHeader = extern struct {
 
             // Bindings
             class.bindTemplateChildPrivate("expand_button", .{});
+            class.bindTemplateChildPrivate("danger_button", .{});
+            class.bindTemplateChildPrivate("danger_strip", .{});
+            class.bindTemplateChildPrivate("danger_label", .{});
             class.bindTemplateChildPrivate("theme_button", .{});
             class.bindTemplateChildPrivate("style_button", .{});
             class.bindTemplateChildPrivate("smaller_button", .{});
@@ -1513,6 +1583,7 @@ pub const SplitHeader = extern struct {
 
             // Template Callbacks
             class.bindTemplateCallback("avatar_clicked", &avatarClicked);
+            class.bindTemplateCallback("danger_clicked", &dangerClicked);
             class.bindTemplateCallback("theme_clicked", &themeClicked);
             class.bindTemplateCallback("cycle_style", &cycleStyleClicked);
             class.bindTemplateCallback("header_smaller", &headerSmallerClicked);

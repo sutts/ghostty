@@ -146,6 +146,19 @@ label.resize-overlay {
   border-radius: 7px;
 }
 
+.split-danger-border {
+  border-radius: 7px;
+}
+
+.surface.split-danger-on .split-danger-border {
+  border: 3px solid rgba(239, 68, 68, 0.75);
+  transition: border-color 200ms ease;
+}
+
+.surface.split-danger-on:focus-within .split-danger-border {
+  border-color: #ef4444;
+}
+
 .split-header {
   border-bottom: 1px solid rgba(127, 127, 127, 0.2);
 }
@@ -161,6 +174,19 @@ label.resize-overlay {
 .split-header .header-controls {
   opacity: 0.35;
   transition: opacity 150ms;
+}
+
+.split-header .danger-strip {
+  background-color: #ef4444;
+  color: #2a0a0a;
+  font-weight: 700;
+  font-size: 0.72em;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+}
+
+.split-header.danger-on {
+  border-bottom-color: rgba(239, 68, 68, 0.5);
 }
 
 .split-header:hover .header-controls {
