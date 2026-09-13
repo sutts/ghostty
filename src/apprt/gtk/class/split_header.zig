@@ -307,6 +307,7 @@ pub const SplitHeader = extern struct {
         host_label: *gtk.Label,
         git_box: *gtk.Widget,
         pwd_box: *gtk.Widget,
+        pwd_icon: *gtk.Image,
         pwd_label: *gtk.Label,
         branch_box: *gtk.Widget,
         branch_label: *gtk.Label,
@@ -371,12 +372,13 @@ pub const SplitHeader = extern struct {
         priv.default_avatar_idle = glib.idleAdd(onDefaultAvatarIdle, self);
 
         self.updateTitle();
-        self.updatePwd();
         self.updateHost();
+        self.updatePwd();
     }
 
     fn propHostname(_: *Self, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         self.updateHost();
+        self.updatePwd();
     }
 
     fn propPwd(_: *Self, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
@@ -399,6 +401,29 @@ pub const SplitHeader = extern struct {
 
     fn updatePwd(self: *Self) void {
         const priv = self.private();
+
+        // The pwd we track is only ever reported by the local shell (OSC 7
+        // reports from a remote host are rejected before reaching us), so
+        // once we're SSH'd elsewhere it's stale and would show the wrong
+        // directory. Swap it for an SSH badge rather than show a misleading
+        // local path.
+        if (self.isRemote()) {
+            priv.pwd_box.addCssClass("pwd-remote");
+            priv.pwd_icon.setFromIconName("network-server-symbolic");
+            var buf: [256]u8 = undefined;
+            const label = if (priv.hostname) |host|
+                std.fmt.bufPrintZ(&buf, "SSH: {s}", .{host}) catch "SSH"
+            else
+                "SSH";
+            priv.pwd_label.setLabel(label);
+            priv.pwd_box.setVisible(1);
+            self.setGitStats(null);
+            return;
+        }
+
+        priv.pwd_box.removeCssClass("pwd-remote");
+        priv.pwd_icon.setFromIconName("folder-symbolic");
+
         const pwd = priv.pwd orelse {
             priv.pwd_box.setVisible(0);
             self.setGitStats(null);
@@ -410,12 +435,17 @@ pub const SplitHeader = extern struct {
         self.refreshGit();
     }
 
-    fn updateHost(self: *Self) void {
+    fn isRemote(self: *Self) bool {
         const priv = self.private();
         const host: [:0]const u8 = if (priv.hostname) |h| h else std.mem.span(glib.getHostName());
         const local_host = std.mem.span(glib.getHostName());
+        return !std.mem.eql(u8, host, local_host);
+    }
 
-        const is_remote = !std.mem.eql(u8, host, local_host);
+    fn updateHost(self: *Self) void {
+        const priv = self.private();
+        const host: [:0]const u8 = if (priv.hostname) |h| h else std.mem.span(glib.getHostName());
+        const is_remote = self.isRemote();
 
         if (is_remote) {
             priv.host_icon.setFromIconName("network-server-symbolic");
@@ -1572,6 +1602,7 @@ pub const SplitHeader = extern struct {
             class.bindTemplateChildPrivate("host_label", .{});
             class.bindTemplateChildPrivate("git_box", .{});
             class.bindTemplateChildPrivate("pwd_box", .{});
+            class.bindTemplateChildPrivate("pwd_icon", .{});
             class.bindTemplateChildPrivate("pwd_label", .{});
             class.bindTemplateChildPrivate("branch_box", .{});
             class.bindTemplateChildPrivate("branch_label", .{});

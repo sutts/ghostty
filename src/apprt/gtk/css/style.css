@@ -324,6 +324,21 @@ label.resize-overlay {
   font-weight: 600;
 }
 
+.split-header .pwd-box.pwd-remote {
+  color: #38bdf8;
+}
+
+.split-header .pwd-box.pwd-remote image {
+  color: #38bdf8;
+  opacity: 1;
+}
+
+.split-header .pwd-box.pwd-remote label {
+  color: #38bdf8;
+  opacity: 1;
+  font-weight: 600;
+}
+
 .split-header-picker .avatar-choice {
   padding: 0;
   min-width: 0;

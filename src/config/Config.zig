@@ -2045,7 +2045,7 @@ keybind: Keybinds = .{},
 /// left padding to 2 and the right padding to 4. If you want to set both
 /// paddings to the same value, you can use a single value. For example,
 /// `window-padding-x = 2` will set both paddings to 2.
-@"window-padding-x": WindowPadding = .{ .top_left = 2, .bottom_right = 2 },
+@"window-padding-x": WindowPadding = .{ .top_left = 4, .bottom_right = 4 },
 
 /// Vertical window padding. This applies padding between the terminal cells and
 /// the top and bottom window borders. The value is in points, meaning that it
@@ -2064,7 +2064,7 @@ keybind: Keybinds = .{},
 /// top padding to 2 and the bottom padding to 4. If you want to set both
 /// paddings to the same value, you can use a single value. For example,
 /// `window-padding-y = 2` will set both paddings to 2.
-@"window-padding-y": WindowPadding = .{ .top_left = 2, .bottom_right = 2 },
+@"window-padding-y": WindowPadding = .{ .top_left = 4, .bottom_right = 4 },
 
 /// The viewport dimensions are usually not perfectly divisible by the cell
 /// size. In this case, some extra padding on the end of a column and the bottom
