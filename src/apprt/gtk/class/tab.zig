@@ -195,6 +195,36 @@ pub const Tab = extern struct {
 
         pub const none: @This() = .{};
     }) *Self {
+        const tab = newEmpty(config);
+
+        // Create our initial surface in the split tree.
+        tab.private().split_tree.newSplit(.right, null, .{
+            .command = overrides.command,
+            .shell_integration = overrides.shell_integration,
+            .working_directory = overrides.working_directory,
+            .title = overrides.title,
+        }) catch |err| switch (err) {
+            error.OutOfMemory => {
+                // TODO: We should make our "no surfaces" state more aesthetically
+                // pleasing and show something like an "Oops, something went wrong"
+                // message. For now, this is incredibly unlikely.
+                @panic("oom");
+            },
+        };
+
+        return tab;
+    }
+
+    /// Create a new tab like `new`, but without creating an initial
+    /// surface/split. The caller must install a split tree with
+    /// `getSplitTree().setTree(...)` before the tab is usable. This is used
+    /// when restoring a persisted split tree, so we don't spawn (and
+    /// immediately discard) a throwaway shell.
+    pub fn newForRestore(config: ?*Config) *Self {
+        return newEmpty(config);
+    }
+
+    fn newEmpty(config: ?*Config) *Self {
         const tab = gobject.ext.newInstance(Tab, .{});
 
         const priv: *Private = tab.private();
@@ -209,21 +239,6 @@ pub const Tab = extern struct {
         }
 
         tab.as(gobject.Object).notifyByPspec(properties.config.impl.param_spec);
-
-        // Create our initial surface in the split tree.
-        priv.split_tree.newSplit(.right, null, .{
-            .command = overrides.command,
-            .shell_integration = overrides.shell_integration,
-            .working_directory = overrides.working_directory,
-            .title = overrides.title,
-        }) catch |err| switch (err) {
-            error.OutOfMemory => {
-                // TODO: We should make our "no surfaces" state more aesthetically
-                // pleasing and show something like an "Oops, something went wrong"
-                // message. For now, this is incredibly unlikely.
-                @panic("oom");
-            },
-        };
 
         return tab;
     }

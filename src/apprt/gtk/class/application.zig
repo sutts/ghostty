@@ -43,6 +43,7 @@ const Window = @import("window.zig").Window;
 const Tab = @import("tab.zig").Tab;
 const CloseConfirmationDialog = @import("close_confirmation_dialog.zig").CloseConfirmationDialog;
 const ConfigErrorsDialog = @import("config_errors_dialog.zig").ConfigErrorsDialog;
+const SessionState = @import("../SessionState.zig");
 const GlobalShortcuts = @import("global_shortcuts.zig").GlobalShortcuts;
 const OpenURI = @import("../portal.zig").OpenURI;
 const media = @import("../media.zig");
@@ -188,6 +189,13 @@ pub const Application = extern struct {
         /// once. This prevents quitting the app before we've shown one
         /// window.
         requested_window: bool = false,
+
+        /// Set to true the first time `activate` runs, so that a saved
+        /// window/tab/split session (see `window-save-state`) is only
+        /// ever restored once per process, even though GIO may invoke
+        /// `activate` again later (e.g. a second `ghostty` invocation
+        /// activating this already-running instance).
+        session_restore_attempted: bool = false,
 
         /// This is set to false internally when the event loop
         /// should exit and the application should quit. This must
@@ -651,6 +659,10 @@ pub const Application = extern struct {
     }
 
     fn quitNow(self: *Self) void {
+        // Save our window/tab/split layout and working directories before
+        // we destroy anything, if window-save-state is enabled.
+        SessionState.save(self);
+
         // Get all our windows and destroy them, forcing them to free.
         const list = gtk.Window.listToplevels();
         defer list.free();
@@ -1540,8 +1552,25 @@ pub const Application = extern struct {
     fn activate(self: *Self) callconv(.c) void {
         log.debug("activate", .{});
 
-        // Queue a new window
         const priv = self.private();
+
+        // On our very first activation, try to restore a previously saved
+        // window/tab/split session instead of opening the usual blank
+        // window. Subsequent activations (e.g. a second `ghostty`
+        // invocation while this instance is already running) always fall
+        // through to the normal new-window behavior below.
+        if (!priv.session_restore_attempted) {
+            priv.session_restore_attempted = true;
+            if (self.tryRestoreSession()) {
+                gio.Application.virtual_methods.activate.call(
+                    Class.parent,
+                    self.as(Parent),
+                );
+                return;
+            }
+        }
+
+        // Queue a new window
         _ = priv.core_app.mailbox.push(global.io(), .{
             .new_window = .{},
         }, .{ .forever = {} });
@@ -1551,6 +1580,90 @@ pub const Application = extern struct {
             Class.parent,
             self.as(Parent),
         );
+    }
+
+    /// Attempt to restore a previously saved window/tab/split session (see
+    /// `window-save-state`). Returns true if at least one window was
+    /// restored, in which case the caller should skip creating the usual
+    /// blank default window.
+    fn tryRestoreSession(self: *Self) bool {
+        const priv = self.private();
+        var loaded = SessionState.tryLoad(
+            self.allocator(),
+            priv.config.get(),
+        ) orelse return false;
+        defer loaded.deinit();
+
+        var restored: usize = 0;
+        for (loaded.state.windows) |w| {
+            self.restoreWindow(w) catch |err| {
+                log.warn("failed to restore a window from session state: {}", .{err});
+                continue;
+            };
+            restored += 1;
+        }
+        log.info(
+            "restored {d} of {d} window(s) from saved session",
+            .{ restored, loaded.state.windows.len },
+        );
+        return restored > 0;
+    }
+
+    /// Recreate a single saved window, its tabs, and their split trees
+    /// (including per-split working directories where known).
+    fn restoreWindow(self: *Self, w: SessionState.WindowState) !void {
+        if (w.tabs.len == 0) {
+            log.warn("skipping restore of a saved window with no tabs", .{});
+            return;
+        }
+        const gpa = self.allocator();
+        log.debug(
+            "restoring window: {d}x{d} maximized={} {d} tab(s) active_tab={d}",
+            .{ w.width, w.height, w.maximized, w.tabs.len, w.active_tab },
+        );
+
+        // Same bookkeeping `newWindow` does: note we've requested a window
+        // at least once so we don't quit before showing one.
+        self.private().requested_window = true;
+
+        const win = Window.new(self, .{});
+        _ = gobject.Object.bindProperty(
+            self.as(gobject.Object),
+            "config",
+            win.as(gobject.Object),
+            "config",
+            .{},
+        );
+        win.as(gtk.Window).setDefaultSize(@max(w.width, 1), @max(w.height, 1));
+
+        var pages: std.ArrayList(*adw.TabPage) = .empty;
+        defer pages.deinit(gpa);
+
+        for (w.tabs) |t| {
+            var tree = SessionState.buildTree(gpa, t.tree) catch |err| {
+                log.warn("failed to restore a tab's split layout: {}", .{err});
+                continue;
+            };
+            defer tree.deinit();
+
+            const title: ?[:0]const u8 = if (t.title) |ti| gpa.dupeZ(u8, ti) catch null else null;
+            defer if (title) |ti| gpa.free(ti);
+
+            try pages.append(gpa, win.newTabForRestore(&tree, title));
+        }
+
+        if (pages.items.len == 0) {
+            log.warn("no tabs could be restored for a saved window, discarding it", .{});
+            win.as(gtk.Window).destroy();
+            return;
+        }
+
+        win.getTabView().setSelectedPage(
+            pages.items[@min(w.active_tab, pages.items.len - 1)],
+        );
+        if (w.maximized) win.as(gtk.Window).maximize();
+
+        gtk.Window.present(win.as(gtk.Window));
     }
 
     fn dispose(self: *Self) callconv(.c) void {

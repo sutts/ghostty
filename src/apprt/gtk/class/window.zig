@@ -30,6 +30,7 @@ const DebugWarning = @import("debug_warning.zig").DebugWarning;
 const CommandPalette = @import("command_palette.zig").CommandPalette;
 const WeakRef = @import("../weak_ref.zig").WeakRef;
 const TitleDialog = @import("title_dialog.zig").TitleDialog;
+const SessionState = @import("../SessionState.zig");
 
 const log = std.log.scoped(.gtk_ghostty_window);
 
@@ -540,6 +541,54 @@ pub const Window = extern struct {
         return page;
     }
 
+    /// Create a new tab whose split tree is the given (already-built) tree,
+    /// instead of a single default surface. Used when restoring a persisted
+    /// window layout. The tab is appended at the end of the tab bar and is
+    /// not automatically selected; the caller selects the desired active
+    /// tab once all of a window's tabs have been added.
+    pub fn newTabForRestore(
+        self: *Self,
+        tree: *const Surface.Tree,
+        title: ?[:0]const u8,
+    ) *adw.TabPage {
+        const priv: *Private = self.private();
+        const tab_view = priv.tab_view;
+
+        const tab = Tab.newForRestore(priv.config);
+        if (title) |t| tab.setTitleOverride(t);
+
+        const page = tab_view.append(tab.as(gtk.Widget));
+
+        _ = tab.as(gobject.Object).bindProperty(
+            "title",
+            page.as(gobject.Object),
+            "title",
+            .{ .sync_create = true },
+        );
+        _ = tab.as(gobject.Object).bindProperty(
+            "tooltip",
+            page.as(gobject.Object),
+            "tooltip",
+            .{ .sync_create = true },
+        );
+
+        // Connect signals BEFORE installing the tree so that setting it
+        // below triggers the same "changed" handling that a normal new
+        // split does (title/tab bindings, etc.).
+        const split_tree = tab.getSplitTree();
+        _ = SplitTree.signals.changed.connect(
+            split_tree,
+            *Self,
+            tabSplitTreeChanged,
+            self,
+            .{},
+        );
+
+        split_tree.setTree(tree);
+
+        return page;
+    }
+
     pub const SelectTab = union(enum) {
         previous,
         next,
@@ -1041,7 +1090,7 @@ pub const Window = extern struct {
         return self.as(gtk.Window).isFullscreen() != 0;
     }
 
-    fn isMaximized(self: *Window) bool {
+    pub fn isMaximized(self: *Window) bool {
         return self.as(gtk.Window).isMaximized() != 0;
     }
 
@@ -1587,6 +1636,7 @@ pub const Window = extern struct {
             return @intFromBool(true);
         }
 
+        self.saveSessionIfLastWindow();
         self.as(gtk.Window).destroy();
         return @intFromBool(false);
     }
@@ -1595,7 +1645,23 @@ pub const Window = extern struct {
         _: *CloseConfirmationDialog,
         self: *Self,
     ) callconv(.c) void {
+        self.saveSessionIfLastWindow();
         self.as(gtk.Window).destroy();
+    }
+
+    /// If this is the only window the application currently has open,
+    /// save the window/tab/split session (see `window-save-state`) before
+    /// it's destroyed. Closing an app's last window this way never goes
+    /// through `Application.quit`/`quitNow` -- by the time the main loop
+    /// notices zero windows remain and force-quits, this window (and
+    /// everything in it) is already gone, so that's too late to save.
+    fn saveSessionIfLastWindow(self: *Self) void {
+        _ = self;
+        const list: ?*glib.List = Application.default().as(gtk.Application).getWindows();
+        if (list != null and list.?.f_next == null) {
+            log.debug("last window closing, saving session state before destroy", .{});
+            SessionState.save(Application.default());
+        }
     }
 
     fn closeConfirmationCloseTab(

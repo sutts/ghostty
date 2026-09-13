@@ -2318,7 +2318,9 @@ keybind: Keybinds = .{},
 ///
 ///   * `default` will use the default system behavior. On macOS, this
 ///     will only save state if the application is forcibly terminated
-///     or if it is configured systemwide via Settings.app.
+///     or if it is configured systemwide via Settings.app. On Linux,
+///     `default` currently behaves the same as `never`, since there is
+///     no systemwide convention to defer to.
 ///
 ///   * `never` will never save window state.
 ///
@@ -2338,7 +2340,15 @@ keybind: Keybinds = .{},
 ///
 /// The default value is `default`.
 ///
-/// This is currently only supported on macOS. This has no effect on Linux.
+/// On macOS, this is implemented using the native window restoration system
+/// and covers window position, size, tabs, and splits. On Linux (GTK), there
+/// is no native session restoration, so this is implemented separately:
+/// `always` saves window size/maximized state, tabs, splits, and (when
+/// known via shell integration) each split's working directory to a state
+/// file on clean exit, and restores them on the next launch. Window
+/// position is never restored on Linux, since the GTK runtime does not
+/// support applications positioning their own windows. Only a clean exit
+/// saves state; Ghostty being forcibly killed will not save state on Linux.
 @"window-save-state": WindowSaveState = .default,
 
 /// Resize the window in discrete increments of the focused surface's cell size.
