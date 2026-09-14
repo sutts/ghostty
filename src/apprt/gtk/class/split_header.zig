@@ -1,5 +1,6 @@
 const std = @import("std");
 const adw = @import("adw");
+const cairo = @import("cairo");
 const gdk = @import("gdk");
 const gio = @import("gio");
 const glib = @import("glib");
@@ -859,6 +860,22 @@ pub const SplitHeader = extern struct {
         self.openBranchLink();
     }
 
+    /// Opens the working directory in the file manager. When SSH'd
+    /// elsewhere we don't know the remote directory, so open the remote
+    /// host itself over sftp and let the file manager take it from there.
+    fn pwdClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = self.private();
+        if (self.isRemote()) {
+            const host = priv.hostname orelse return;
+            var buf: [512]u8 = undefined;
+            const url = std.fmt.bufPrint(&buf, "sftp://{s}/", .{host}) catch return;
+            Application.default().openUrl(.{ .kind = .unknown, .url = url });
+            return;
+        }
+        const pwd = priv.pwd orelse return;
+        Application.default().openUrl(.{ .kind = .unknown, .url = pwd });
+    }
+
     fn openBranchLink(self: *Self) void {
         const priv = self.private();
         if (priv.branch_link_cancellable) |c| {
@@ -1408,7 +1425,7 @@ pub const SplitHeader = extern struct {
         const list = gtk.ListBox.new();
         list.setSelectionMode(.none);
         list.setActivateOnSingleClick(1);
-        list.append(makeThemeRow(default_theme_name, "Default (from config)"));
+        list.append(makeThemeRow(default_theme_name, "Default (from config)", null));
         appendThemeRows(list);
         list.setFilterFunc(themeFilter, self, null);
         _ = gtk.ListBox.signals.row_activated.connect(list, *Self, themeRowActivated, self, .{});
@@ -1442,18 +1459,147 @@ pub const SplitHeader = extern struct {
         _ = search.as(gtk.Widget).grabFocus();
     }
 
-    fn makeThemeRow(value: [:0]const u8, text: [:0]const u8) *gtk.Widget {
+    fn makeThemeRow(value: [:0]const u8, text: [:0]const u8, swatch: ?*Swatch) *gtk.Widget {
+        const box = gtk.Box.new(.horizontal, 10);
+        const box_widget = box.as(gtk.Widget);
+        box_widget.setMarginStart(8);
+        box_widget.setMarginEnd(8);
+        box_widget.setMarginTop(4);
+        box_widget.setMarginBottom(4);
+
+        // Every row gets a swatch-sized slot so the names stay aligned even
+        // for the "default" row and themes that failed to parse.
+        const area = gtk.DrawingArea.new();
+        area.setContentWidth(Swatch.width);
+        area.setContentHeight(Swatch.height);
+        area.as(gtk.Widget).setValign(.center);
+        if (swatch) |sw| area.setDrawFunc(swatchDraw, sw, Swatch.destroy);
+        box.append(area.as(gtk.Widget));
+
         const label = gtk.Label.new(text);
         label.setXalign(0);
-        const label_widget = label.as(gtk.Widget);
-        label_widget.setMarginStart(8);
-        label_widget.setMarginEnd(8);
-        label_widget.setMarginTop(4);
-        label_widget.setMarginBottom(4);
+        label.setEllipsize(.end);
+        box.append(label.as(gtk.Widget));
+
         const row = gtk.ListBoxRow.new();
-        row.setChild(label_widget);
+        row.setChild(box_widget);
         row.as(gtk.Widget).setName(value);
         return row.as(gtk.Widget);
+    }
+
+    /// The colors shown next to a theme in the picker, read straight from
+    /// the theme file so we don't pay for a full config parse per theme.
+    const Swatch = struct {
+        const width: c_int = 84;
+        const height: c_int = 20;
+
+        bg: Rgb = .{ .r = 0, .g = 0, .b = 0 },
+        fg: Rgb = .{ .r = 255, .g = 255, .b = 255 },
+        palette: [8]?Rgb = .{null} ** 8,
+
+        const Rgb = struct { r: u8, g: u8, b: u8 };
+
+        /// Parses `key = value` lines, keeping only the colors the swatch
+        /// draws. Returns null if the file has no background at all since
+        /// then it isn't really a theme we can preview.
+        fn parse(text: []const u8) ?Swatch {
+            var sw: Swatch = .{};
+            var have_bg = false;
+            var it = std.mem.splitScalar(u8, text, '\n');
+            while (it.next()) |raw| {
+                const line = std.mem.trim(u8, raw, " \t\r");
+                if (line.len == 0 or line[0] == '#') continue;
+                const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+                const key = std.mem.trim(u8, line[0..eq], " \t");
+                const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
+                if (std.mem.eql(u8, key, "background")) {
+                    sw.bg = parseHex(value) orelse continue;
+                    have_bg = true;
+                } else if (std.mem.eql(u8, key, "foreground")) {
+                    sw.fg = parseHex(value) orelse continue;
+                } else if (std.mem.eql(u8, key, "palette")) {
+                    const peq = std.mem.indexOfScalar(u8, value, '=') orelse continue;
+                    const idx = std.fmt.parseInt(u8, std.mem.trim(u8, value[0..peq], " \t"), 10) catch continue;
+                    if (idx >= sw.palette.len) continue;
+                    sw.palette[idx] = parseHex(std.mem.trim(u8, value[peq + 1 ..], " \t"));
+                }
+            }
+            return if (have_bg) sw else null;
+        }
+
+        fn parseHex(value: []const u8) ?Rgb {
+            const hex = if (std.mem.startsWith(u8, value, "#")) value[1..] else value;
+            if (hex.len != 6) return null;
+            const r = std.fmt.parseInt(u8, hex[0..2], 16) catch return null;
+            const g = std.fmt.parseInt(u8, hex[2..4], 16) catch return null;
+            const b = std.fmt.parseInt(u8, hex[4..6], 16) catch return null;
+            return .{ .r = r, .g = g, .b = b };
+        }
+
+        fn create(text: []const u8) ?*Swatch {
+            const sw = parse(text) orelse return null;
+            const ptr = std.heap.c_allocator.create(Swatch) catch return null;
+            ptr.* = sw;
+            return ptr;
+        }
+
+        fn destroy(ud: ?*anyopaque) callconv(.c) void {
+            const ptr: *Swatch = @ptrCast(@alignCast(ud orelse return));
+            std.heap.c_allocator.destroy(ptr);
+        }
+    };
+
+    fn setSource(cr: *cairo.Context, c: Swatch.Rgb) void {
+        cr.setSourceRgb(
+            @as(f64, @floatFromInt(c.r)) / 255.0,
+            @as(f64, @floatFromInt(c.g)) / 255.0,
+            @as(f64, @floatFromInt(c.b)) / 255.0,
+        );
+    }
+
+    /// A rounded rectangle of the theme background holding a "text" bar in
+    /// the foreground color and dots for palette 1-6 (red through cyan),
+    /// which is enough to tell themes apart at a glance.
+    fn swatchDraw(
+        _: *gtk.DrawingArea,
+        cr: *cairo.Context,
+        width: c_int,
+        height: c_int,
+        ud: ?*anyopaque,
+    ) callconv(.c) void {
+        const sw: *Swatch = @ptrCast(@alignCast(ud orelse return));
+        const w: f64 = @floatFromInt(width);
+        const h: f64 = @floatFromInt(height);
+        const radius: f64 = 4;
+        const pi: f64 = std.math.pi;
+
+        cr.newSubPath();
+        cr.arc(w - radius, radius, radius, -pi / 2, 0);
+        cr.arc(w - radius, h - radius, radius, 0, pi / 2);
+        cr.arc(radius, h - radius, radius, pi / 2, pi);
+        cr.arc(radius, radius, radius, pi, 3 * pi / 2);
+        cr.closePath();
+        setSource(cr, sw.bg);
+        cr.fillPreserve();
+        cr.setSourceRgba(0.5, 0.5, 0.5, 0.35);
+        cr.setLineWidth(1);
+        cr.stroke();
+
+        // Two short "lines of text" in the foreground color.
+        setSource(cr, sw.fg);
+        cr.rectangle(7, h / 2 - 4, 14, 2.5);
+        cr.rectangle(7, h / 2 + 1.5, 9, 2.5);
+        cr.fill();
+
+        var x: f64 = 32;
+        for (sw.palette[1..7]) |maybe| {
+            if (maybe) |c| {
+                setSource(cr, c);
+                cr.arc(x, h / 2, 3, 0, 2 * pi);
+                cr.fill();
+            }
+            x += 8;
+        }
     }
 
     fn appendThemeRows(list: *gtk.ListBox) void {
@@ -1461,7 +1607,16 @@ pub const SplitHeader = extern struct {
         defer arena.deinit();
         const alloc = arena.allocator();
 
-        var names: std.ArrayList([:0]const u8) = .empty;
+        const Entry = struct {
+            name: [:0]const u8,
+            swatch: ?*Swatch,
+
+            fn lessThan(_: void, a: @This(), b: @This()) bool {
+                return std.ascii.lessThanIgnoreCase(a.name, b.name);
+            }
+        };
+
+        var entries: std.ArrayList(Entry) = .empty;
         var it: themepkg.LocationIterator = .{ .arena_alloc = alloc };
         while (it.next() catch null) |loc| {
             var dir = std.Io.Dir.cwd().openDir(global.io(), loc.dir, .{ .iterate = true }) catch continue;
@@ -1475,25 +1630,27 @@ pub const SplitHeader = extern struct {
                 if (std.mem.eql(u8, entry.name, ".DS_Store")) continue;
                 // User themes are listed first and shadow bundled ones of the
                 // same name, matching how themes are resolved.
-                if (containsName(names.items, entry.name)) continue;
+                if (containsName(entries.items, entry.name)) continue;
                 const name = alloc.dupeZ(u8, entry.name) catch continue;
-                names.append(alloc, name) catch continue;
+                // Theme files are a few hundred bytes; anything huge isn't
+                // a theme and just gets no swatch.
+                const swatch: ?*Swatch = if (dir.readFileAlloc(global.io(), entry.name, alloc, .limited(64 * 1024))) |text|
+                    Swatch.create(text)
+                else |_|
+                    null;
+                entries.append(alloc, .{ .name = name, .swatch = swatch }) catch continue;
             }
         }
 
-        std.mem.sort([:0]const u8, names.items, {}, lessThanName);
-        for (names.items) |name| list.append(makeThemeRow(name, name));
+        std.mem.sort(Entry, entries.items, {}, Entry.lessThan);
+        for (entries.items) |e| list.append(makeThemeRow(e.name, e.name, e.swatch));
     }
 
-    fn containsName(names: []const [:0]const u8, name: []const u8) bool {
-        for (names) |existing| {
-            if (std.mem.eql(u8, existing, name)) return true;
+    fn containsName(entries: anytype, name: []const u8) bool {
+        for (entries) |existing| {
+            if (std.mem.eql(u8, existing.name, name)) return true;
         }
         return false;
-    }
-
-    fn lessThanName(_: void, a: [:0]const u8, b: [:0]const u8) bool {
-        return std.ascii.lessThanIgnoreCase(a, b);
     }
 
     fn themeFilter(row: *gtk.ListBoxRow, ud: ?*anyopaque) callconv(.c) c_int {
@@ -1816,6 +1973,7 @@ pub const SplitHeader = extern struct {
             class.bindTemplateCallback("header_larger", &headerLargerClicked);
             class.bindTemplateCallback("title_clicked", &titleClicked);
             class.bindTemplateCallback("branch_clicked", &branchClicked);
+            class.bindTemplateCallback("pwd_clicked", &pwdClicked);
             class.bindTemplateCallback("expand_clicked", &expandClicked);
 
             // Properties

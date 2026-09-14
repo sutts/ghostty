@@ -88,31 +88,143 @@ template $GhosttySplitHeader: Adw.Bin {
           hexpand: true;
           spacing: 3;
 
-          Button title_button {
-            styles [
-              "flat",
-              "title-button",
-            ]
+          // The controls share a row with the title so they line up with
+          // it rather than floating between the title and the info row.
+          Box title_row {
+            orientation: horizontal;
+            spacing: 6;
 
-            halign: start;
-            focusable: false;
-            focus-on-click: false;
-            clicked => $title_clicked();
-            tooltip-text: _("Click to rename");
-
-            cursor: Gdk.Cursor {
-              name: "pointer";
-            };
-
-            child: Label title_label {
+            Button title_button {
               styles [
-                "title-label",
+                "flat",
+                "title-button",
               ]
 
-              xalign: 0.0;
-              ellipsize: end;
-              single-line-mode: true;
-            };
+              halign: start;
+              hexpand: true;
+              focusable: false;
+              focus-on-click: false;
+              clicked => $title_clicked();
+              tooltip-text: _("Click to rename");
+
+              cursor: Gdk.Cursor {
+                name: "pointer";
+              };
+
+              child: Label title_label {
+                styles [
+                  "title-label",
+                ]
+
+                xalign: 0.0;
+                ellipsize: end;
+                single-line-mode: true;
+              };
+            }
+
+            Box {
+              styles [
+                "header-controls",
+                "linked",
+              ]
+
+              valign: center;
+
+              Button expand_button {
+                styles [
+                  "flat",
+                ]
+
+                icon-name: "view-fullscreen-symbolic";
+                tooltip-text: _("Expand Block (Overlay)");
+                focusable: false;
+                focus-on-click: false;
+                clicked => $expand_clicked();
+
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
+              }
+
+              Button danger_button {
+                styles [
+                  "flat",
+                ]
+
+                icon-name: "dialog-warning-symbolic";
+                tooltip-text: _("Mark Split as Dangerous");
+                focusable: false;
+                focus-on-click: false;
+                clicked => $danger_clicked();
+
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
+              }
+
+              Button theme_button {
+                styles [
+                  "flat",
+                ]
+
+                icon-name: "preferences-desktop-appearance-symbolic";
+                tooltip-text: _("Terminal Theme");
+                focusable: false;
+                focus-on-click: false;
+                clicked => $theme_clicked();
+
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
+              }
+
+              Button style_button {
+                styles [
+                  "flat",
+                ]
+
+                icon-name: "view-dual-symbolic";
+                focusable: false;
+                focus-on-click: false;
+                clicked => $cycle_style();
+
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
+              }
+
+              Button smaller_button {
+                styles [
+                  "flat",
+                ]
+
+                icon-name: "list-remove-symbolic";
+                tooltip-text: _("Smaller Header");
+                focusable: false;
+                focus-on-click: false;
+                clicked => $header_smaller();
+
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
+              }
+
+              Button larger_button {
+                styles [
+                  "flat",
+                ]
+
+                icon-name: "list-add-symbolic";
+                tooltip-text: _("Larger Header");
+                focusable: false;
+                focus-on-click: false;
+                clicked => $header_larger();
+
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
+              }
+            }
           }
 
           Box info_row {
@@ -148,33 +260,46 @@ template $GhosttySplitHeader: Adw.Bin {
               }
             }
 
-            Box pwd_box {
+            Button pwd_box {
               styles [
                 "info-pill",
+                "flat",
                 "pwd-box",
+                "pwd-button",
               ]
 
-              spacing: 5;
+              focusable: false;
+              focus-on-click: false;
+              clicked => $pwd_clicked();
+              tooltip-text: _("Open in file manager");
 
-              Image pwd_icon {
-                styles [
-                  "dim",
-                ]
+              cursor: Gdk.Cursor {
+                name: "pointer";
+              };
 
-                icon-name: "folder-symbolic";
-                pixel-size: 12;
-              }
+              child: Box {
+                spacing: 5;
 
-              Label pwd_label {
-                styles [
-                  "dim",
-                  "mono",
-                ]
+                Image pwd_icon {
+                  styles [
+                    "dim",
+                  ]
 
-                xalign: 0.0;
-                ellipsize: start;
-                single-line-mode: true;
-              }
+                  icon-name: "folder-symbolic";
+                  pixel-size: 12;
+                }
+
+                Label pwd_label {
+                  styles [
+                    "dim",
+                    "mono",
+                  ]
+
+                  xalign: 0.0;
+                  ellipsize: start;
+                  single-line-mode: true;
+                }
+              };
             }
 
             Box git_box {
@@ -259,110 +384,6 @@ template $GhosttySplitHeader: Adw.Bin {
                 }
               }
             }
-          }
-        }
-
-        Box {
-          styles [
-            "header-controls",
-            "linked",
-          ]
-
-          valign: center;
-
-          Button expand_button {
-            styles [
-              "flat",
-            ]
-
-            icon-name: "view-fullscreen-symbolic";
-            tooltip-text: _("Expand Block (Overlay)");
-            focusable: false;
-            focus-on-click: false;
-            clicked => $expand_clicked();
-
-            cursor: Gdk.Cursor {
-              name: "pointer";
-            };
-          }
-
-          Button danger_button {
-            styles [
-              "flat",
-            ]
-
-            icon-name: "dialog-warning-symbolic";
-            tooltip-text: _("Mark Split as Dangerous");
-            focusable: false;
-            focus-on-click: false;
-            clicked => $danger_clicked();
-
-            cursor: Gdk.Cursor {
-              name: "pointer";
-            };
-          }
-
-          Button theme_button {
-            styles [
-              "flat",
-            ]
-
-            icon-name: "preferences-desktop-appearance-symbolic";
-            tooltip-text: _("Terminal Theme");
-            focusable: false;
-            focus-on-click: false;
-            clicked => $theme_clicked();
-
-            cursor: Gdk.Cursor {
-              name: "pointer";
-            };
-          }
-
-          Button style_button {
-            styles [
-              "flat",
-            ]
-
-            icon-name: "view-dual-symbolic";
-            focusable: false;
-            focus-on-click: false;
-            clicked => $cycle_style();
-
-            cursor: Gdk.Cursor {
-              name: "pointer";
-            };
-          }
-
-          Button smaller_button {
-            styles [
-              "flat",
-            ]
-
-            icon-name: "list-remove-symbolic";
-            tooltip-text: _("Smaller Header");
-            focusable: false;
-            focus-on-click: false;
-            clicked => $header_smaller();
-
-            cursor: Gdk.Cursor {
-              name: "pointer";
-            };
-          }
-
-          Button larger_button {
-            styles [
-              "flat",
-            ]
-
-            icon-name: "list-add-symbolic";
-            tooltip-text: _("Larger Header");
-            focusable: false;
-            focus-on-click: false;
-            clicked => $header_larger();
-
-            cursor: Gdk.Cursor {
-              name: "pointer";
-            };
           }
         }
       }
