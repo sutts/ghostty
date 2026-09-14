@@ -79,13 +79,15 @@ done
 
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
 
-# Pinning the version stops the build stamping in the git commit and dirty
-# state, which otherwise forces a full recompile after every commit or edit.
-version="1.3.2-sutts"
-build_args=(-Doptimize="$optimize" -Dversion-string="$version" -Dlib-version-string="$version")
+build_args=(-Doptimize="$optimize")
 
 if ! $install; then
-    zig build "${build_args[@]}"
+    # Pinning the version stops the build stamping in the git commit, which
+    # otherwise forces a full recompile after every commit while iterating.
+    # Installed builds skip the pin so `ghostty +version` reports the real
+    # upstream version plus the branch and commit they were built from.
+    version="1.3.2-sutts"
+    zig build "${build_args[@]}" -Dversion-string="$version" -Dlib-version-string="$version"
 
     # Run as a separate instance so the window isn't handed to an
     # already-running official Ghostty, which has no split header support.
