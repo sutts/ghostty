@@ -16,12 +16,13 @@ the branch and commit it was built from.
 1 [avatar](#avatars) · 2 title (click to rename) · 3 host pill ([SSH](#ssh)) ·
 4 [folder pill](#folder) · 5 header controls ([expand](#expand),
 [warning](#warnings), [theme](#themes), style, − / +) ·
-6 [branch pill](#gitlab) · 7 git status
+6 [branch pill](#gitlab) · 7 [git status](#difftool) (click to diff against main)
 
 - [**Split headers**](#split-header) – a strip above every split with avatar, title, folder, host and git status.
 - [**Avatars**](#avatars) – pick an image per split; it tints the header and outline, and can become the app icon.
 - [**Folder**](#folder) – click the working directory to open it in your file manager.
 - [**GitLab / GitHub**](#gitlab) – click the branch to open its PR/MR, or the branch page.
+- [**Diff tool**](#difftool) – click the git status counts to open `git difftool --dir-diff main`.
 - [**SSH**](#ssh) – remote sessions show a host badge and open over sftp.
 - [**Expand**](#expand) – pop a split out into a centred overlay.
 - [**Warnings**](#warnings) – mark a split dangerous: red banner, frame and watermark.
@@ -73,6 +74,15 @@ The header shows, left to right:
   repository. Clicking the branch opens the open PR/MR for the branch on
   GitHub or GitLab (detected from the `origin` remote, using the `gh` or
   `glab` CLI if installed) or falls back to the branch's tree view.
+- <a id="difftool"></a>**Git status counts.** Clicking the changed/added/deleted
+  counts runs `git difftool --dir-diff --no-prompt main` in the split's
+  directory, so your configured difftool (`diff.guitool`, falling back to
+  `diff.tool`) opens with the whole working tree compared against `main`.
+  If there is no `main` it tries `master`, then whatever `origin/HEAD`
+  points at. A toast explains the failure if no difftool is configured or
+  no base branch can be found. Local directories only. Set
+  `split-header-diff-command` to run something else instead, such as
+  `smerge .` for Sublime Merge, which cannot diff directories.
 
 Header controls sit on the title row and stay dimmed until you hover the
 header:
@@ -169,6 +179,9 @@ features shell out to tools at runtime and quietly do less without them:
   fallback. With neither installed the menu option does nothing.
 - The branch pill uses `gh` (GitHub) or `glab` (GitLab) to find an open
   PR/MR. Without them it opens the branch page instead.
+- The git status pill needs a difftool configured in git, for example
+  `git config --global diff.guitool meld` (or `diff.tool`). Without one
+  it shows a toast and does nothing.
 
 ### Get the source
 
@@ -293,6 +306,7 @@ split-header-style = banner
 split-header-size = 2
 split-header-avatar-dir = /home/sutts/projects/coolicons/images
 split-header-default-avatar = sutts_avatar.jpg
+split-header-diff-command = smerge .
 shell-integration-features = ssh-env
 window-save-state = always
 ```
@@ -358,6 +372,20 @@ avatar shown in every header that has not had one picked. If the file is
 missing the header shows a placeholder icon and logs a warning. The
 picker's *Set as Default Split Avatar* option writes or replaces this
 line for you.
+
+### `split-header-diff-command = smerge .`
+
+Fork option. What clicking the git status counts in a header runs. The
+command is run with `/bin/sh -c` in the split's working directory, with
+`BASE` in its environment set to the base branch (`main`, else `master`,
+else `origin/HEAD`; empty if none). When unset, the click runs
+`git difftool --dir-diff --no-prompt --tool=<tool> $BASE` using the git
+`diff.guitool` setting, falling back to `diff.tool`, which suits tools
+that can diff directories such as GoLand (`goland diff`) or VS Code
+(`code --diff`). Sublime Merge has no directory diff, so `smerge .`
+opens the repository in it instead; something like
+`goland diff "$PWD" "$(git rev-parse --show-toplevel)"` or
+`git difftool --dir-diff --tool=vscode "$BASE"` are also valid values.
 
 ### `shell-integration-features = ssh-env`
 

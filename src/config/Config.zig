@@ -1124,6 +1124,20 @@ palette: Palette = .{},
 /// size. Values outside that range are clamped.
 @"split-header-size": i8 = 0,
 
+/// The command run when the git status counts in a split header are
+/// clicked. It is run with `/bin/sh -c` in the split's working directory,
+/// with the environment variable `BASE` set to the base branch (`main` if
+/// it exists, then `master`, then whatever `origin/HEAD` points at; empty
+/// if none is found).
+///
+/// When unset the header runs
+/// `git difftool --dir-diff --no-prompt --tool=<tool> $BASE`, where the
+/// tool is the git `diff.guitool` setting, falling back to `diff.tool`.
+///
+/// Tools that cannot diff directories, such as Sublime Merge, can be opened
+/// on the repository instead, for example `split-header-diff-command = smerge .`
+@"split-header-diff-command": ?[:0]const u8 = null,
+
 /// Control when Ghostty preserves a zoomed split. Under normal circumstances,
 /// any operation that changes focus or layout of the split tree in a window
 /// will unzoom any zoomed split. This configuration allows you to control

@@ -347,41 +347,54 @@ template $GhosttySplitHeader: Adw.Bin {
                 };
               }
 
-              Box stats_box {
+              Button stats_box {
                 styles [
                   "info-pill",
+                  "flat",
+                  "stats-button",
                 ]
 
                 visible: false;
-                spacing: 5;
+                focusable: false;
+                focus-on-click: false;
+                clicked => $stats_clicked();
+                tooltip-text: _("Open diff against main in your difftool");
 
-                Label files_label {
-                  styles [
-                    "dim",
-                    "mono",
-                  ]
-                }
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
 
-                Label add_label {
-                  styles [
-                    "mono",
-                    "diff-add",
-                  ]
-                }
+                child: Box {
+                  spacing: 5;
 
-                Label del_label {
-                  styles [
-                    "mono",
-                    "diff-del",
-                  ]
-                }
+                  Label files_label {
+                    styles [
+                      "dim",
+                      "mono",
+                    ]
+                  }
 
-                Label untracked_label {
-                  styles [
-                    "dim",
-                    "mono",
-                  ]
-                }
+                  Label add_label {
+                    styles [
+                      "mono",
+                      "diff-add",
+                    ]
+                  }
+
+                  Label del_label {
+                    styles [
+                      "mono",
+                      "diff-del",
+                    ]
+                  }
+
+                  Label untracked_label {
+                    styles [
+                      "dim",
+                      "mono",
+                    ]
+                  }
+                };
               }
             }
           }

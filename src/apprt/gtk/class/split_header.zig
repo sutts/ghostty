@@ -243,6 +243,31 @@ extern fn g_dir_read_name(dir: *glib.Dir) ?[*:0]const u8;
 
 const Hsl = struct { h: f64, s: f64, l: f64 };
 
+/// Opens a diff of the working tree against the base branch: `main` if it
+/// exists, then `master`, then whatever `origin/HEAD` points at. With a
+/// custom command in `$2` (from `split-header-diff-command`) that command is
+/// run with `BASE` in its environment; otherwise the user's configured git
+/// difftool is run as a directory diff. Exits non-zero if there is no base
+/// branch or no difftool is configured so the header can show a toast.
+const difftool_script =
+    \\cd "$1" || exit 1
+    \\export GIT_OPTIONAL_LOCKS=0
+    \\base=
+    \\for b in main master; do
+    \\  if git rev-parse -q --verify "refs/heads/$b" >/dev/null 2>&1; then base=$b; break; fi
+    \\done
+    \\if [ -z "$base" ]; then
+    \\  base=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)
+    \\fi
+    \\if [ -n "$2" ]; then
+    \\  BASE="$base" exec /bin/sh -c "$2"
+    \\fi
+    \\[ -n "$base" ] || exit 1
+    \\tool=$(git config --get diff.guitool || git config --get diff.tool) || exit 2
+    \\[ -n "$tool" ] || exit 2
+    \\exec git difftool --dir-diff --no-prompt --tool="$tool" "$base"
+;
+
 const GitStats = struct {
     branch: []const u8,
     files: u64 = 0,
@@ -377,7 +402,7 @@ pub const SplitHeader = extern struct {
         pwd_label: *gtk.Label,
         branch_box: *gtk.Button,
         branch_label: *gtk.Label,
-        stats_box: *gtk.Widget,
+        stats_box: *gtk.Button,
         files_label: *gtk.Label,
         add_label: *gtk.Label,
         del_label: *gtk.Label,
@@ -405,6 +430,7 @@ pub const SplitHeader = extern struct {
         git_timer: ?c_uint = null,
         git_cancellable: ?*gio.Cancellable = null,
         branch_link_cancellable: ?*gio.Cancellable = null,
+        difftool_cancellable: ?*gio.Cancellable = null,
 
         /// Set once disposed so in-flight git callbacks don't touch
         /// template children that no longer exist.
@@ -821,14 +847,14 @@ pub const SplitHeader = extern struct {
         const priv = self.private();
         const stats = stats_ orelse {
             priv.branch_box.as(gtk.Widget).setVisible(0);
-            priv.stats_box.setVisible(0);
+            priv.stats_box.as(gtk.Widget).setVisible(0);
             return;
         };
 
         var branch_buf: [256]u8 = undefined;
         priv.branch_label.setLabel(std.fmt.bufPrintZ(&branch_buf, "{s}", .{stats.branch}) catch "?");
         priv.branch_box.as(gtk.Widget).setVisible(1);
-        priv.stats_box.setVisible(1);
+        priv.stats_box.as(gtk.Widget).setVisible(1);
 
         if (stats.files == 0 and stats.untracked == 0) {
             priv.files_label.setLabel("clean");
@@ -858,6 +884,80 @@ pub const SplitHeader = extern struct {
 
     fn branchClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         self.openBranchLink();
+    }
+
+    fn statsClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        self.openDiffTool();
+    }
+
+    /// Launches `git difftool --dir-diff` against the base branch in the
+    /// split's working directory. The tool runs detached; we only wait on
+    /// it so a quick failure (no base branch, no difftool) can be reported.
+    fn openDiffTool(self: *Self) void {
+        const priv = self.private();
+        if (priv.difftool_cancellable) |c| {
+            c.cancel();
+            c.unref();
+            priv.difftool_cancellable = null;
+        }
+        if (self.isRemote()) {
+            self.toast("Diff tool is only available for local directories");
+            return;
+        }
+        const pwd = priv.pwd orelse return;
+
+        const launcher = gio.SubprocessLauncher.new(.{
+            .stdout_silence = true,
+            .stderr_silence = true,
+        });
+        defer launcher.unref();
+
+        const config = Application.default().getConfig();
+        defer config.unref();
+        const command: [:0]const u8 = config.get().@"split-header-diff-command" orelse "";
+
+        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", difftool_script, "sh", pwd.ptr, command.ptr };
+        var err: ?*glib.Error = null;
+        const subprocess = launcher.spawnv(@ptrCast(&argv), &err) orelse {
+            if (err) |e| e.free();
+            log.warn("unable to start difftool helper", .{});
+            self.toast("Unable to start git difftool");
+            return;
+        };
+        defer subprocess.unref();
+
+        const cancellable = gio.Cancellable.new();
+        priv.difftool_cancellable = cancellable;
+        subprocess.waitAsync(cancellable, onDiffToolDone, self.ref());
+    }
+
+    fn onDiffToolDone(
+        source: ?*gobject.Object,
+        result: *gio.AsyncResult,
+        ud: ?*anyopaque,
+    ) callconv(.c) void {
+        const self: *Self = @ptrCast(@alignCast(ud orelse return));
+        defer self.unref();
+        const subprocess = gobject.ext.cast(gio.Subprocess, source orelse return) orelse return;
+
+        var err: ?*glib.Error = null;
+        const ok = subprocess.waitFinish(result, &err) != 0;
+        if (err) |e| e.free();
+
+        // A failed wait means we were cancelled or superseded.
+        if (!ok or self.private().disposed) return;
+        if (subprocess.getIfExited() == 0) return;
+        switch (subprocess.getExitStatus()) {
+            0 => {},
+            2 => self.toast("No difftool configured (set diff.tool or diff.guitool)"),
+            else => self.toast("Diff command failed: no main/master branch, not a repository, or the command exited with an error"),
+        }
+    }
+
+    fn toast(self: *Self, title: [*:0]const u8) void {
+        const root = self.as(gtk.Widget).getRoot() orelse return;
+        const window = gobject.ext.cast(Window, root) orelse return;
+        window.addToast(title);
     }
 
     /// Opens the working directory in the file manager. When SSH'd
@@ -1864,6 +1964,11 @@ pub const SplitHeader = extern struct {
             c.unref();
             priv.branch_link_cancellable = null;
         }
+        if (priv.difftool_cancellable) |c| {
+            c.cancel();
+            c.unref();
+            priv.difftool_cancellable = null;
+        }
         if (priv.context_popover) |p| {
             p.as(gtk.Widget).unparent();
             priv.context_popover = null;
@@ -1973,6 +2078,7 @@ pub const SplitHeader = extern struct {
             class.bindTemplateCallback("header_larger", &headerLargerClicked);
             class.bindTemplateCallback("title_clicked", &titleClicked);
             class.bindTemplateCallback("branch_clicked", &branchClicked);
+            class.bindTemplateCallback("stats_clicked", &statsClicked);
             class.bindTemplateCallback("pwd_clicked", &pwdClicked);
             class.bindTemplateCallback("expand_clicked", &expandClicked);
 
