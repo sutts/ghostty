@@ -11,6 +11,13 @@ the branch and commit it was built from.
 
 **At a glance**
 
+![The split header, with numbered callouts](images/enhancements/split-header.png)
+
+1 [avatar](#avatars) · 2 title (click to rename) · 3 host pill ([SSH](#ssh)) ·
+4 [folder pill](#folder) · 5 header controls ([expand](#expand),
+[warning](#warnings), [theme](#themes), style, − / +) ·
+6 [branch pill](#gitlab) · 7 git status
+
 - [**Split headers**](#split-header) – a strip above every split with avatar, title, folder, host and git status.
 - [**Avatars**](#avatars) – pick an image per split; it tints the header and outline, and can become the app icon.
 - [**Folder**](#folder) – click the working directory to open it in your file manager.
@@ -77,6 +84,12 @@ header:
 | <a id="themes"></a>Theme | Opens a searchable list of every installed Ghostty theme with a colour swatch for each. Picking one applies it to this split only; the override survives config reloads and light/dark switches. |
 | Style | Cycles the header layout between `portrait`, `banner` and `rail`. |
 | − / + | Shrink or grow this split's header (avatar, text and padding scale together) from two steps below to three above the default. |
+
+![A split marked dangerous: red banner, red frame and tiled watermark](images/enhancements/danger-split.png)
+
+*A split marked dangerous with the warning triangle: the title becomes a
+red banner, the surface gets a red frame, and the title is tiled across
+the terminal as a watermark.*
 
 The right-click context menu on a terminal also has a **Header Style**
 submenu (Portrait / Banner / Rail). Choosing one shows the header if it
