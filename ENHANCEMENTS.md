@@ -293,7 +293,7 @@ split-header-style = banner
 split-header-size = 2
 split-header-avatar-dir = /home/sutts/projects/coolicons/images
 split-header-default-avatar = sutts_avatar.jpg
-shell-integration-features = ssh-env,ssh-terminfo
+shell-integration-features = ssh-env
 window-save-state = always
 ```
 
@@ -359,25 +359,52 @@ missing the header shows a placeholder icon and logs a warning. The
 picker's *Set as Default Split Avatar* option writes or replaces this
 line for you.
 
-### `shell-integration-features = ssh-env,ssh-terminfo`
+### `shell-integration-features = ssh-env`
 
 Stock option. A comma-separated list of shell-integration features to
-enable; features you leave out keep their defaults, so this line adds the
-two SSH features on top of the usual `cursor`, `sudo` and `title`.
+enable; features you leave out keep their defaults, so this line adds
+`ssh-env` on top of the usual `cursor`, `sudo` and `title`.
 
-- `ssh-env` – when you run `ssh`, converts `TERM` from `xterm-ghostty` to
-  `xterm-256color` for the remote side and forwards `COLORTERM`,
-  `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`. This stops remote programs
-  complaining about an unknown terminal.
-- `ssh-terminfo` – tries to install Ghostty's own terminfo entry on the
-  remote host with `tic` the first time you connect, then uses
-  `xterm-ghostty` there. Successful installs are cached locally
-  (`ghostty +ssh-cache` manages the cache). Needs `tic` on the remote.
+`ssh-env` wraps `ssh` so that the remote side sees `TERM=xterm-256color`
+instead of `xterm-ghostty`, and forwards `COLORTERM`, `TERM_PROGRAM` and
+`TERM_PROGRAM_VERSION`. Every host already has the `xterm-256color`
+terminfo entry, so nano, less, htop and friends work immediately, and
+because `COLORTERM=truecolor` is forwarded, modern programs still use
+24-bit colour. It also gives the split header's hostname and SSH badge a
+reliable signal for remote sessions.
 
-With both enabled Ghostty uses its full terminfo on hosts where the
-install succeeds and falls back to `xterm-256color` elsewhere. They also
-give the split header's hostname and SSH badge a reliable signal for
-remote sessions.
+#### Why not `ssh-terminfo`
+
+Ghostty also offers `ssh-terminfo`, which installs Ghostty's own
+`xterm-ghostty` entry on the remote host with `tic` on first connection
+and then keeps `TERM=xterm-ghostty` there. It sounds better, but the
+install goes into the login user's `~/.terminfo`, and on Ubuntu (and most
+distros) `sudo` resets `HOME` to `/root`, so anything run under sudo
+cannot find it:
+
+```
+$ sudo nano /etc/pulsar/pulsar.env
+ncurses: cannot initialize terminal type ($TERM="xterm-ghostty"); exiting
+```
+
+The fix is a one-off system-wide install on every host
+(`infocmp -x xterm-ghostty | sudo tic -x -o /usr/share/terminfo -`),
+which is easy to forget on a new server and fails silently until the
+next `sudo nano`. `ssh-env` alone avoids the problem entirely.
+
+What you give up by not shipping the full entry is small:
+
+- Curly and coloured underlines in older vim and helix on the remote
+  (neovim 0.10+ asks the terminal directly and keeps them).
+- Synchronized output for a remote `tmux`, so heavy redraws may tear
+  slightly. Neovim negotiates this itself and is unaffected.
+- Overline, and 24-bit colour advertised through terminfo for old
+  ncurses-only programs that ignore `COLORTERM`.
+
+If you do want the full entry on a host you administer, run the
+`infocmp | sudo tic` line above once as your login user; `ssh-env` will
+still send `xterm-256color`, so also `export TERM=xterm-ghostty` in that
+host's shell profile.
 
 ### `window-save-state = always`
 
