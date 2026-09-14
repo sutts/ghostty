@@ -113,14 +113,6 @@ layout on demand, independent of `window-save-state`:
 - **Restore Profile…** offers a dropdown of saved names and opens the
   saved windows alongside whatever is already open.
 
-### Smaller fixes
-
-- Shells that re-report the same title or directory on every prompt no
-  longer trigger a header refresh, which removed flicker in the git pill.
-- Listing the same file in `config-file` and on the command line is now
-  treated as a harmless duplicate rather than a recursive-include error.
-- The split resize handle no longer jitters during programmatic moves.
-
 ---
 
 ## Building and installing
@@ -156,12 +148,14 @@ sudo dnf install zig pkgconf-pkg-config blueprint-compiler \
 On Debian/Ubuntu use the same list with `-dev` instead of `-devel`
 (for example `libgtk-4-dev`, `libadwaita-1-dev`, `libglib2.0-dev`).
 
-Runtime-only extras, needed just for the avatar and app-icon helpers:
+Nothing else is needed to build or run the terminal. Two optional
+features shell out to tools at runtime and quietly do less without them:
 
-- `python3` with Pillow (`python3-pillow`) to resize images into icon sizes.
-- `python3-xlib` (optional) to push a new icon to already-open X11 windows.
-- ImageMagick `convert` (optional) as a fallback resizer.
-- `gh` or `glab` (optional) so the branch pill can find open PRs/MRs.
+- *Set as Desktop App Icon* needs `python3` with Pillow
+  (`python3-pillow`) to resize the image, or ImageMagick `convert` as a
+  fallback. With neither installed the menu option does nothing.
+- The branch pill uses `gh` (GitHub) or `glab` (GitLab) to find an open
+  PR/MR. Without them it opens the branch page instead.
 
 ### Get the source
 
