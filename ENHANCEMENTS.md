@@ -15,7 +15,7 @@ the branch and commit it was built from.
 
 1 [avatar](#avatars) · 2 title (click to rename) · 3 host pill ([SSH](#ssh)) ·
 4 [folder pill](#folder) · 5 header controls ([expand](#expand),
-[warning](#warnings), [theme](#themes), style, − / +) ·
+[warning](#warnings), [theme](#themes), style, − / +, [menu](#header-menu)) ·
 6 [branch pill](#gitlab) · 7 [git status](#difftool) (click to diff against main)
 
 - [**Split headers**](#split-header) – a strip above every split with avatar, title, folder, host and git status.
@@ -94,6 +94,7 @@ header:
 | <a id="themes"></a>Theme | Opens a searchable list of every installed Ghostty theme with a colour swatch for each. Picking one applies it to this split only; the override survives config reloads and light/dark switches. |
 | Style | Cycles the header layout between `portrait`, `banner` and `rail`. |
 | − / + | Shrink or grow this split's header (avatar, text and padding scale together) from two steps below to three above the default. |
+| <a id="header-menu"></a>Menu | Opens the same menu as right-clicking the terminal, for when you would rather not right-click into a split to reach it. |
 
 ![A split marked dangerous: red banner, red frame and tiled watermark](images/enhancements/danger-split.png)
 
@@ -103,7 +104,8 @@ the terminal as a watermark.*
 
 The right-click context menu on a terminal also has a **Header Style**
 submenu (Portrait / Banner / Rail). Choosing one shows the header if it
-was hidden.
+was hidden. The header's menu button opens that same menu: it is the one
+menu model rather than a copy, so the two can never drift apart.
 
 Headers use a little extra padding around the terminal content, so the
 default window padding was raised from 2 to 4 points to keep text off the

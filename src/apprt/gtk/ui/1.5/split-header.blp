@@ -224,6 +224,25 @@ template $GhosttySplitHeader: Adw.Bin {
                   name: "pointer";
                 };
               }
+
+              // Shows the surface's context menu, the same one that a right
+              // click on the terminal opens.
+              MenuButton menu_button {
+                styles [
+                  "flat",
+                ]
+
+                notify::active => $menu_active();
+                icon-name: "open-menu-symbolic";
+                tooltip-text: _("Menu");
+                focusable: false;
+                focus-on-click: false;
+                direction: down;
+
+                cursor: Gdk.Cursor {
+                  name: "pointer";
+                };
+              }
             }
           }
 

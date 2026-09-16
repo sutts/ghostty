@@ -385,6 +385,7 @@ pub const SplitHeader = extern struct {
         style_button: *gtk.Button,
         smaller_button: *gtk.Button,
         larger_button: *gtk.Button,
+        menu_button: *gtk.MenuButton,
         avatar_button: *gtk.Button,
         avatar_image: *gtk.Image,
         avatar_fade: *gtk.Widget,
@@ -1446,7 +1447,47 @@ pub const SplitHeader = extern struct {
         const self: *Self = @ptrCast(@alignCast(ud orelse return 0));
         self.private().default_avatar_idle = null;
         self.loadDefaultAvatar();
+        self.attachMenuModel();
         return 0;
+    }
+
+    //---------------------------------------------------------------
+    // Menu
+
+    /// Point the header's menu button at the surface's context menu model so
+    /// it shows exactly the same menu as a right click on the terminal. The
+    /// model can only be fetched once the header is inside its surface, and
+    /// it has to be set before the first click because GtkMenuButton pops the
+    /// popover up before it notifies `active`.
+    fn attachMenuModel(self: *Self) void {
+        const priv = self.private();
+        if (priv.menu_button.getMenuModel() != null) return;
+        const widget = self.findSurface() orelse return;
+        const surface = gobject.ext.cast(Surface, widget) orelse return;
+        priv.menu_button.setMenuModel(surface.contextMenuModel());
+    }
+
+    fn menuActive(
+        button: *gtk.MenuButton,
+        _: *gobject.ParamSpec,
+        self: *Self,
+    ) callconv(.c) void {
+        // Closing the menu leaves focus on the header, so put it back on
+        // the terminal like the right-click context menu does.
+        if (button.getActive() == 0) {
+            if (self.findSurface()) |widget| {
+                if (gobject.ext.cast(Surface, widget)) |surface| surface.grabFocus();
+            }
+            return;
+        }
+
+        // Safety net in case the header wasn't in its surface yet when the
+        // post-init idle ran.
+        self.attachMenuModel();
+
+        const widget = self.findSurface() orelse return;
+        const surface = gobject.ext.cast(Surface, widget) orelse return;
+        surface.syncContextMenu();
     }
 
     fn loadDefaultAvatar(self: *Self) void {
@@ -2047,6 +2088,7 @@ pub const SplitHeader = extern struct {
             class.bindTemplateChildPrivate("style_button", .{});
             class.bindTemplateChildPrivate("smaller_button", .{});
             class.bindTemplateChildPrivate("larger_button", .{});
+            class.bindTemplateChildPrivate("menu_button", .{});
             class.bindTemplateChildPrivate("avatar_button", .{});
             class.bindTemplateChildPrivate("avatar_image", .{});
             class.bindTemplateChildPrivate("avatar_fade", .{});
@@ -2081,6 +2123,7 @@ pub const SplitHeader = extern struct {
             class.bindTemplateCallback("stats_clicked", &statsClicked);
             class.bindTemplateCallback("pwd_clicked", &pwdClicked);
             class.bindTemplateCallback("expand_clicked", &expandClicked);
+            class.bindTemplateCallback("menu_active", &menuActive);
 
             // Properties
             gobject.ext.registerProperties(class, &.{

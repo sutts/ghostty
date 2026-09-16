@@ -3003,6 +3003,25 @@ pub const Surface = extern struct {
         self.close();
     }
 
+    /// The menu model shown by the right-click context menu. Exposed so
+    /// other widgets (the split header's menu button) can show the exact
+    /// same menu rather than duplicating it.
+    pub fn contextMenuModel(self: *Self) ?*gio.MenuModel {
+        return self.private().context_menu.getMenuModel();
+    }
+
+    /// Emit the `menu` signal so listeners refresh the enabled state of the
+    /// context menu's actions. Callers showing the menu themselves must call
+    /// this first, the same way the right-click handler does.
+    pub fn syncContextMenu(self: *Self) void {
+        signals.menu.impl.emit(
+            self,
+            null,
+            .{},
+            null,
+        );
+    }
+
     fn contextMenuClosed(
         _: *gtk.PopoverMenu,
         self: *Self,
